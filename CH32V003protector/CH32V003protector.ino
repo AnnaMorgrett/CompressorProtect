@@ -37,18 +37,18 @@
  * ============================================================================
  */
 
-#include <EEPROM.h>   // Maxint R&D library for CH32V003 (Option Bytes emulation)
-                      // Files EEPROM.h + EEPROM.cpp must be in this sketch folder.
-
+#include <EEPROM.h>  // Maxint R&D library for CH32V003 (Option Bytes emulation)
+                     // Files EEPROM.h + EEPROM.cpp must be in this sketch folder.
+#include "debug_tx.h"
 // --- PIN MAPPING ---
-#define PIN_VOLTAGE  PA2
-#define PIN_CURRENT  PA1
-#define PIN_RELAY    PD6
-#define PIN_LED      PD4
-#define PIN_BUZZER   PC1
+#define PIN_VOLTAGE PA2
+#define PIN_CURRENT PA1
+#define PIN_RELAY PD6
+#define PIN_LED PD4
+#define PIN_BUZZER PC1
 
 // --- EEPROM ADDRESS ---
-#define EEPROM_ADDR_LAST_ERR  0
+#define EEPROM_ADDR_LAST_ERR 0
 
 // ============================================================================
 // EEPROM HELPER: write + commit in one call (replaces AVR EEPROM.update)
@@ -85,26 +85,26 @@ static inline void wdt_reset_ch32() {
 //   CH32V003 Vref = 3.3V (AMS1117-3.3 on schematic) vs ATmega 5V.
 //   Re-calibrate against a multimeter after first build.
 // ============================================================================
-#define KALIBRASI_VOLT  1.635f
-#define KALIBRASI_ARUS  0.01969f
-#define NOISE_CUTOFF_V  4
-#define NOISE_CUTOFF_I  5
+#define KALIBRASI_VOLT 1.635f
+#define KALIBRASI_ARUS 0.01969f
+#define NOISE_CUTOFF_V 4
+#define NOISE_CUTOFF_I 5
 
 // --- SYSTEM PROTECTION PARAMETERS ---
-#define VOLTAGE_OVER         260.0f
-#define VOLTAGE_OVER_REC     250.0f
-#define VOLTAGE_UNDER        175.0f
-#define VOLTAGE_UNDER_REC    185.0f
-#define CURRENT_RUN_MAX      1.2f
-#define CURRENT_LRA_MAX      1.6f
-#define LRA_TIME             2000UL
-#define OCP_RUN_DELAY        4000UL
+#define VOLTAGE_OVER 260.0f
+#define VOLTAGE_OVER_REC 250.0f
+#define VOLTAGE_UNDER 175.0f
+#define VOLTAGE_UNDER_REC 185.0f
+#define CURRENT_RUN_MAX 1.2f
+#define CURRENT_LRA_MAX 1.6f
+#define LRA_TIME 2000UL
+#define OCP_RUN_DELAY 4000UL
 #define VOLTAGE_SAG_CRITICAL 160.0f
-#define STARTUP_DELAY        300000UL
-#define V_DROP_TOLERANCE     5000UL
-#define OCP_MAX_RETRY        3
-#define BUZZER_INT_ERROR     1800000UL
-#define BUZZER_INT_LOCKOUT    900000UL
+#define STARTUP_DELAY 300000UL
+#define V_DROP_TOLERANCE 5000UL
+#define OCP_MAX_RETRY 3
+#define BUZZER_INT_ERROR 1800000UL
+#define BUZZER_INT_LOCKOUT 900000UL
 
 // --- STATE MACHINE ENUMS ---
 enum SystemState {
@@ -116,34 +116,34 @@ enum SystemState {
 
 enum ErrorType {
   ERR_NONE = 0,
-  ERR_OVP  = 1,
-  ERR_UVP  = 2,
-  ERR_OCP  = 3
+  ERR_OVP = 1,
+  ERR_UVP = 2,
+  ERR_OCP = 3
 };
 
 // --- GLOBAL VARIABLES ---
 SystemState currentState = STATE_INIT_DELAY;
-ErrorType   currentError = ERR_NONE;
+ErrorType currentError = ERR_NONE;
 
-unsigned long stateTimer       = 0;
-unsigned long voltageBadTimer  = 0;
-unsigned long ocpRunTimer      = 0;
-unsigned long lraTimer         = 0;
-byte          ocpRetryCount    = 0;
+unsigned long stateTimer = 0;
+unsigned long voltageBadTimer = 0;
+unsigned long ocpRunTimer = 0;
+unsigned long lraTimer = 0;
+byte ocpRetryCount = 0;
 
 float teganganRMS = 0.0f;
-float arusRMS     = 0.0f;
+float arusRMS = 0.0f;
 
 int rawV_PeakToPeak = 0;
 int rawI_PeakToPeak = 0;
 
-unsigned long ledTimer    = 0;
+unsigned long ledTimer = 0;
 unsigned long buzzerTimer = 0;
 
-int  buzzerTarget = 0;
-int  buzzerDurasi = 0;
+int buzzerTarget = 0;
+int buzzerDurasi = 0;
 byte currentBeeps = 0;
-bool buzzerIsOn   = false;
+bool buzzerIsOn = false;
 
 // ============================================================================
 // INTEGER SQUARE ROOT — avoids ~2KB soft-float libgcc sqrt on RV32EC (no FPU)
@@ -151,14 +151,14 @@ bool buzzerIsOn   = false;
 // ============================================================================
 static uint32_t isqrt32(uint32_t n) {
   if (n == 0) return 0;
-  uint32_t op  = n;
+  uint32_t op = n;
   uint32_t res = 0;
   uint32_t one = 1UL << 30;
   while (one > op) one >>= 2;
   while (one != 0) {
     if (op >= res + one) {
-      op  -= res + one;
-      res  = (res >> 1) + one;
+      op -= res + one;
+      res = (res >> 1) + one;
     } else {
       res >>= 1;
     }
@@ -191,16 +191,16 @@ void setup() {
   pinMode(PIN_CURRENT, INPUT_ANALOG);
 
   // 3. Set outputs LOW before direction (prevents glitches)
-  digitalWrite(PIN_RELAY,  LOW);
-  digitalWrite(PIN_LED,    LOW);
+  digitalWrite(PIN_RELAY, LOW);
+  digitalWrite(PIN_LED, LOW);
   digitalWrite(PIN_BUZZER, LOW);
-  pinMode(PIN_RELAY,  OUTPUT);
-  pinMode(PIN_LED,    OUTPUT);
+  pinMode(PIN_RELAY, OUTPUT);
+  pinMode(PIN_LED, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
 
   // 4. Hardware UART — 115200 baud, USART1 TX = PD5
-  Serial.begin(115200);
-
+  Serial.begin(9600);
+  dbgBegin();
   // 5. Init EEPROM (Maxint lib loads Option Bytes into RAM buffer)
   EEPROM.begin();
 
@@ -229,7 +229,7 @@ void loop() {
   logikaSistem(currentMillis);
   engineLED(currentMillis);
   engineBuzzer(currentMillis);
-  cetakDataSerial(currentMillis);
+  dbgPlot((long)teganganRMS, (long)(arusRMS * 1000.0f));
 }
 
 // ============================================================================
@@ -245,24 +245,24 @@ const unsigned long RMS_PERIOD = 20;
 
 void bacaSensor(unsigned long currentMillis) {
   static unsigned long rmsStartTime = 0;
-  static long     sumSquaredI  = 0;
-  static long     sumI         = 0;
-  static uint16_t sampleCount  = 0;
-  static int      maxV = 0, minV = 1023;
+  static long sumSquaredI = 0;
+  static long sumI = 0;
+  static uint16_t sampleCount = 0;
+  static int maxV = 0, minV = 1023;
 
   int valV = analogRead(PIN_VOLTAGE);
   int valI = analogRead(PIN_CURRENT);
 
   if (valV > maxV) maxV = valV;
   if (valV < minV) minV = valV;
-  sumI        += valI;
+  sumI += valI;
   sumSquaredI += (long)valI * valI;
   sampleCount++;
 
   if (currentMillis - rmsStartTime >= RMS_PERIOD) {
 
     // --- Voltage: Peak-to-Peak ---
-    rawV_PeakToPeak  = maxV - minV;
+    rawV_PeakToPeak = maxV - minV;
     int filteredRawV = (rawV_PeakToPeak <= NOISE_CUTOFF_V) ? 0 : rawV_PeakToPeak;
     float teganganInstan = (float)filteredRawV * KALIBRASI_VOLT;
     if (teganganRMS == 0.0f) {
@@ -288,7 +288,7 @@ void bacaSensor(unsigned long currentMillis) {
         arusRMS = 0.0f;
         rawI_PeakToPeak = 0;
       } else {
-        rawI_PeakToPeak  = (int)(rawI_scaled >> 3);
+        rawI_PeakToPeak = (int)(rawI_scaled >> 3);
         float arusInstan = ((float)rawI_scaled * KALIBRASI_ARUS) / 8.0f;
         if (arusRMS == 0.0f) {
           arusRMS = arusInstan;
@@ -298,8 +298,11 @@ void bacaSensor(unsigned long currentMillis) {
       }
     }
 
-    maxV = 0; minV = 1023;
-    sumI = 0; sumSquaredI = 0; sampleCount = 0;
+    maxV = 0;
+    minV = 1023;
+    sumI = 0;
+    sumSquaredI = 0;
+    sampleCount = 0;
     rmsStartTime = currentMillis;
   }
 }
@@ -316,7 +319,8 @@ void logikaSistem(unsigned long currentMillis) {
           digitalWrite(PIN_RELAY, HIGH);
           currentState = STATE_NORMAL_RUN;
           stateTimer = currentMillis;
-          lraTimer = 0; ocpRunTimer = 0;
+          lraTimer = 0;
+          ocpRunTimer = 0;
           mulaiBuzzer(1, 1000);
           Serial.println(F(">>> KOMPRESOR ON! Startup Delay Selesai."));
         } else if (teganganRMS < VOLTAGE_UNDER || teganganRMS > VOLTAGE_OVER) {
@@ -356,7 +360,8 @@ void logikaSistem(unsigned long currentMillis) {
           prosesOcpRetry(currentMillis);
         }
       } else {
-        lraTimer = 0; ocpRunTimer = 0;
+        lraTimer = 0;
+        ocpRunTimer = 0;
       }
       break;
 
@@ -367,7 +372,8 @@ void logikaSistem(unsigned long currentMillis) {
           currentState = STATE_NORMAL_RUN;
           currentError = ERR_NONE;
           stateTimer = currentMillis;
-          lraTimer = 0; ocpRunTimer = 0;
+          lraTimer = 0;
+          ocpRunTimer = 0;
           mulaiBuzzer(1, 1000);
           Serial.println(F(">>> RECOVERY: Delay 5m Selesai. KOMPRESOR ON!"));
         }
@@ -392,13 +398,14 @@ void logikaSistem(unsigned long currentMillis) {
 // ============================================================================
 void prosesOcpRetry(unsigned long currentMillis) {
   ocpRetryCount++;
-  ocpRunTimer = 0; lraTimer = 0;
+  ocpRunTimer = 0;
+  lraTimer = 0;
 
   if (ocpRetryCount >= OCP_MAX_RETRY) {
     digitalWrite(PIN_RELAY, LOW);
     currentState = STATE_LOCKOUT;
     currentError = ERR_OCP;
-    buzzerTimer  = currentMillis;
+    buzzerTimer = currentMillis;
     eeprom_save(EEPROM_ADDR_LAST_ERR, (uint8_t)ERR_OCP);
     mulaiBuzzer(3, 100);
     Serial.println(F(">>> LOCKOUT: OCP 3x! Butuh Reset Manual!"));
@@ -412,11 +419,13 @@ void prosesOcpRetry(unsigned long currentMillis) {
 // ============================================================================
 void masukError(ErrorType err, unsigned long currentMillis) {
   digitalWrite(PIN_RELAY, LOW);
-  currentState    = STATE_ERROR;
-  currentError    = err;
-  stateTimer      = currentMillis;
-  buzzerTimer     = currentMillis;
-  voltageBadTimer = 0; ocpRunTimer = 0; lraTimer = 0;
+  currentState = STATE_ERROR;
+  currentError = err;
+  stateTimer = currentMillis;
+  buzzerTimer = currentMillis;
+  voltageBadTimer = 0;
+  ocpRunTimer = 0;
+  lraTimer = 0;
 
   eeprom_save(EEPROM_ADDR_LAST_ERR, (uint8_t)err);
 
@@ -430,10 +439,16 @@ void masukError(ErrorType err, unsigned long currentMillis) {
 // ============================================================================
 // Helper: print float with 1 decimal without pulling in double-precision Print::print(double)
 static void printVolt(float v) {
-  if (v < 0.0f) { Serial.print('-'); v = -v; }
+  if (v < 0.0f) {
+    Serial.print('-');
+    v = -v;
+  }
   long ip = (long)v;
   long fp = (long)((v - (float)ip) * 10.0f + 0.5f);
-  if (fp >= 10) { ip++; fp -= 10; }
+  if (fp >= 10) {
+    ip++;
+    fp -= 10;
+  }
   Serial.print(ip);
   Serial.print('.');
   Serial.print(fp);
@@ -441,14 +456,20 @@ static void printVolt(float v) {
 
 // Helper: print float with 3 decimals without pulling in double-precision Print::print(double)
 static void printCurrent(float a) {
-  if (a < 0.0f) { Serial.print('-'); a = -a; }
+  if (a < 0.0f) {
+    Serial.print('-');
+    a = -a;
+  }
   long ip = (long)a;
   long fp = (long)((a - (float)ip) * 1000.0f + 0.5f);
-  if (fp >= 1000) { ip++; fp -= 1000; }
+  if (fp >= 1000) {
+    ip++;
+    fp -= 1000;
+  }
   Serial.print(ip);
   Serial.print('.');
   if (fp < 100) Serial.print('0');
-  if (fp < 10)  Serial.print('0');
+  if (fp < 10) Serial.print('0');
   Serial.print(fp);
 }
 
@@ -457,11 +478,16 @@ void cetakDataSerial(unsigned long currentMillis) {
   if (currentMillis - lastSerialPrint >= 500) {
     lastSerialPrint = currentMillis;
     if (currentState != STATE_LOCKOUT) {
-      Serial.print(F("[State: ")); Serial.print((int)currentState);
-      Serial.print(F("] | Raw V_PP: ")); Serial.print(rawV_PeakToPeak);
-      Serial.print(F(" => Volt: ")); printVolt(teganganRMS);
-      Serial.print(F(" V  ||  Raw I_PP: ")); Serial.print(rawI_PeakToPeak);
-      Serial.print(F(" => Arus: ")); printCurrent(arusRMS);
+      Serial.print(F("[State: "));
+      Serial.print((int)currentState);
+      Serial.print(F("] | Raw V_PP: "));
+      Serial.print(rawV_PeakToPeak);
+      Serial.print(F(" => Volt: "));
+      printVolt(teganganRMS);
+      Serial.print(F(" V  ||  Raw I_PP: "));
+      Serial.print(rawI_PeakToPeak);
+      Serial.print(F(" => Arus: "));
+      printCurrent(arusRMS);
       Serial.println(F(" A"));
     }
   }
@@ -479,8 +505,8 @@ void engineLED(unsigned long currentMillis) {
       digitalWrite(PIN_LED, !digitalRead(PIN_LED));
     }
   } else {
-    static byte          blinkCounter  = 0;
-    static bool          isOn          = false;
+    static byte blinkCounter = 0;
+    static bool isOn = false;
     static unsigned long errorLedTimer = 0;
     int targetBlinks = (int)currentError;
     if (blinkCounter < targetBlinks * 2) {
@@ -494,7 +520,7 @@ void engineLED(unsigned long currentMillis) {
       digitalWrite(PIN_LED, LOW);
       if (currentMillis - errorLedTimer >= 2000) {
         errorLedTimer = currentMillis;
-        blinkCounter  = 0;
+        blinkCounter = 0;
       }
     }
   }
@@ -507,7 +533,7 @@ void mulaiBuzzer(int jmlBeep, int durasi) {
   buzzerTarget = jmlBeep * 2;
   buzzerDurasi = durasi;
   currentBeeps = 0;
-  buzzerIsOn   = false;
+  buzzerIsOn = false;
 }
 
 void engineBuzzer(unsigned long currentMillis) {
