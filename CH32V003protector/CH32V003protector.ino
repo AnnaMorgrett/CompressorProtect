@@ -177,7 +177,6 @@ void bacaSensor(unsigned long currentMillis);
 void logikaSistem(unsigned long currentMillis);
 void engineLED(unsigned long currentMillis);
 void engineBuzzer(unsigned long currentMillis);
-void cetakDataSerial(unsigned long currentMillis);
 
 // ============================================================================
 // SETUP
@@ -199,8 +198,7 @@ void setup() {
   pinMode(PIN_BUZZER, OUTPUT);
 
   // 4. Hardware UART — 115200 baud, USART1 TX = PD5
-  Serial.begin(9600);
-  dbgBegin();
+dbgBegin();
   // 5. Init EEPROM (Maxint lib loads Option Bytes into RAM buffer)
   EEPROM.begin();
 
@@ -209,12 +207,6 @@ void setup() {
 
   // 7. Report last saved error
   byte lastErr = EEPROM.read(EEPROM_ADDR_LAST_ERR);
-  Serial.println(F("===================================="));
-  Serial.println(F("Sistem Proteksi Mulai. CH32V003 Port."));
-  Serial.println(F("Dual OCP Active. IWDG ~2s Enabled."));
-  Serial.print(F("[OB BLACKBOX] Last Error Code: "));
-  Serial.println(lastErr);
-  Serial.println(F("===================================="));
 }
 
 // ============================================================================
@@ -229,7 +221,7 @@ void loop() {
   logikaSistem(currentMillis);
   engineLED(currentMillis);
   engineBuzzer(currentMillis);
-  dbgPlot((long)teganganRMS, (long)(arusRMS * 1000.0f));
+  debugReport();
 }
 
 // ============================================================================
@@ -322,7 +314,6 @@ void logikaSistem(unsigned long currentMillis) {
           lraTimer = 0;
           ocpRunTimer = 0;
           mulaiBuzzer(1, 1000);
-          Serial.println(F(">>> KOMPRESOR ON! Startup Delay Selesai."));
         } else if (teganganRMS < VOLTAGE_UNDER || teganganRMS > VOLTAGE_OVER) {
           masukError(teganganRMS < VOLTAGE_UNDER ? ERR_UVP : ERR_OVP, currentMillis);
         }
@@ -333,7 +324,6 @@ void logikaSistem(unsigned long currentMillis) {
       digitalWrite(PIN_LED, HIGH);
 
       if (teganganRMS < VOLTAGE_SAG_CRITICAL) {
-        Serial.println(F(">>> TRIP: Blackout/Kedip Sesaat! Safe Shutdown."));
         masukError(ERR_UVP, currentMillis);
         break;
       }
@@ -349,14 +339,12 @@ void logikaSistem(unsigned long currentMillis) {
         ocpRunTimer = 0;
         if (lraTimer == 0) lraTimer = currentMillis;
         if (currentMillis - lraTimer >= LRA_TIME) {
-          Serial.println(F(">>> TRIP: LRA/Macet (>1.6A)! Cutoff 2s."));
           prosesOcpRetry(currentMillis);
         }
       } else if (arusRMS > CURRENT_RUN_MAX) {
         lraTimer = 0;
         if (ocpRunTimer == 0) ocpRunTimer = currentMillis;
         if (currentMillis - ocpRunTimer >= OCP_RUN_DELAY) {
-          Serial.println(F(">>> TRIP: Overcurrent Running (>1.2A)! Cutoff 4s."));
           prosesOcpRetry(currentMillis);
         }
       } else {
@@ -375,7 +363,6 @@ void logikaSistem(unsigned long currentMillis) {
           lraTimer = 0;
           ocpRunTimer = 0;
           mulaiBuzzer(1, 1000);
-          Serial.println(F(">>> RECOVERY: Delay 5m Selesai. KOMPRESOR ON!"));
         }
       }
       if (currentMillis - buzzerTimer >= BUZZER_INT_ERROR) {
@@ -408,7 +395,6 @@ void prosesOcpRetry(unsigned long currentMillis) {
     buzzerTimer = currentMillis;
     eeprom_save(EEPROM_ADDR_LAST_ERR, (uint8_t)ERR_OCP);
     mulaiBuzzer(3, 100);
-    Serial.println(F(">>> LOCKOUT: OCP 3x! Butuh Reset Manual!"));
   } else {
     masukError(ERR_OCP, currentMillis);
   }
@@ -430,68 +416,8 @@ void masukError(ErrorType err, unsigned long currentMillis) {
   eeprom_save(EEPROM_ADDR_LAST_ERR, (uint8_t)err);
 
   mulaiBuzzer(3, 100);
-  Serial.print(F(">>> SYSTEM CUT-OFF! Error Code: "));
-  Serial.println((int)err);
 }
 
-// ============================================================================
-// FUNCTION 3: SERIAL PRINT (every 500ms)
-// ============================================================================
-// Helper: print float with 1 decimal without pulling in double-precision Print::print(double)
-static void printVolt(float v) {
-  if (v < 0.0f) {
-    Serial.print('-');
-    v = -v;
-  }
-  long ip = (long)v;
-  long fp = (long)((v - (float)ip) * 10.0f + 0.5f);
-  if (fp >= 10) {
-    ip++;
-    fp -= 10;
-  }
-  Serial.print(ip);
-  Serial.print('.');
-  Serial.print(fp);
-}
-
-// Helper: print float with 3 decimals without pulling in double-precision Print::print(double)
-static void printCurrent(float a) {
-  if (a < 0.0f) {
-    Serial.print('-');
-    a = -a;
-  }
-  long ip = (long)a;
-  long fp = (long)((a - (float)ip) * 1000.0f + 0.5f);
-  if (fp >= 1000) {
-    ip++;
-    fp -= 1000;
-  }
-  Serial.print(ip);
-  Serial.print('.');
-  if (fp < 100) Serial.print('0');
-  if (fp < 10) Serial.print('0');
-  Serial.print(fp);
-}
-
-void cetakDataSerial(unsigned long currentMillis) {
-  static unsigned long lastSerialPrint = 0;
-  if (currentMillis - lastSerialPrint >= 500) {
-    lastSerialPrint = currentMillis;
-    if (currentState != STATE_LOCKOUT) {
-      Serial.print(F("[State: "));
-      Serial.print((int)currentState);
-      Serial.print(F("] | Raw V_PP: "));
-      Serial.print(rawV_PeakToPeak);
-      Serial.print(F(" => Volt: "));
-      printVolt(teganganRMS);
-      Serial.print(F(" V  ||  Raw I_PP: "));
-      Serial.print(rawI_PeakToPeak);
-      Serial.print(F(" => Arus: "));
-      printCurrent(arusRMS);
-      Serial.println(F(" A"));
-    }
-  }
-}
 
 // ============================================================================
 // FUNCTION 4: LED ENGINE (non-blocking blink)
