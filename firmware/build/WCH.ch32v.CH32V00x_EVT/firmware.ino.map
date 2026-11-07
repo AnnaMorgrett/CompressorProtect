@@ -407,8 +407,6 @@ Discarded input sections
  .text          0x00000000        0x0 C:\Users\AVS\AppData\Local\arduino\sketches\E1F19D3A08ECE559F59E6E3C2AC956D5\sketch\firmware.ino.cpp.o
  .data          0x00000000        0x0 C:\Users\AVS\AppData\Local\arduino\sketches\E1F19D3A08ECE559F59E6E3C2AC956D5\sketch\firmware.ino.cpp.o
  .bss           0x00000000        0x0 C:\Users\AVS\AppData\Local\arduino\sketches\E1F19D3A08ECE559F59E6E3C2AC956D5\sketch\firmware.ino.cpp.o
- .text._Z11debugReportv
-                0x00000000        0x2 C:\Users\AVS\AppData\Local\arduino\sketches\E1F19D3A08ECE559F59E6E3C2AC956D5\sketch\firmware.ino.cpp.o
  .text          0x00000000        0x0 C:\Users\AVS\AppData\Local\arduino\sketches\E1F19D3A08ECE559F59E6E3C2AC956D5\sketch\protection.cpp.o
  .data          0x00000000        0x0 C:\Users\AVS\AppData\Local\arduino\sketches\E1F19D3A08ECE559F59E6E3C2AC956D5\sketch\protection.cpp.o
  .bss           0x00000000        0x0 C:\Users\AVS\AppData\Local\arduino\sketches\E1F19D3A08ECE559F59E6E3C2AC956D5\sketch\protection.cpp.o

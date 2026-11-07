@@ -35,10 +35,7 @@ firmware/
 ├── display_manager.h/.cpp# Direct-register bit-banged TM1637 driver, page cycling, settings menu
 ├── alarm_manager.h/.cpp  # Non-blocking LED status sequences, buzzer beeps, user mute
 ├── storage_manager.h/.cpp# Option-Bytes EEPROM emulation wrapper with XOR checksum
-├── diagnostics.h/.cpp    # System telemetry formatting (conditionally compiled via ENABLE_DEBUG_LOG)
-├── EEPROM.h/.cpp         # Maxint R&D Option-Bytes flash storage driver (26 bytes)
-├── debug_tx.h            # Bit-banged software UART on PC7 (CAL) for lab telemetry
-└── debug_report.ino      # Secondary Arduino IDE tab for detailed ASCII serial reporting
+└── diagnostics.h/.cpp    # System telemetry formatting and bit-banged software UART
 ```
 
 ### Module Responsibilities
