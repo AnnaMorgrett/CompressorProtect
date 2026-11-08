@@ -42,19 +42,13 @@ static uint8_t g_menuParamIndex = 1;
 static uint16_t g_menuEditValue = 0;
 static unsigned long g_saveConfirmTimer = 0;
 
-static inline void clkHigh() { GPIOC->BSHR = (1 << 6); }
-static inline void clkLow()  { GPIOC->BCR  = (1 << 6); }
-static inline void dioHigh() { GPIOC->BSHR = (1 << 4); }
-static inline void dioLow()  { GPIOC->BCR  = (1 << 4); }
+static inline void clkHigh() { digitalWrite(PIN_TM_CLK, HIGH); }
+static inline void clkLow()  { digitalWrite(PIN_TM_CLK, LOW); }
+static inline void dioHigh() { digitalWrite(PIN_TM_DIO, HIGH); }
+static inline void dioLow()  { digitalWrite(PIN_TM_DIO, LOW); }
 
-static inline void dioOutput() {
-  GPIOC->CFGLR = (GPIOC->CFGLR & ~(0x0F << 16)) | (0x01 << 16);
-}
-
-static inline void dioInput() {
-  GPIOC->CFGLR = (GPIOC->CFGLR & ~(0x0F << 16)) | (0x08 << 16);
-  GPIOC->BSHR = (1 << 4);
-}
+static inline void dioOutput() { pinMode(PIN_TM_DIO, OUTPUT); }
+static inline void dioInput()  { pinMode(PIN_TM_DIO, INPUT_PULLUP); }
 
 static void __attribute__((noinline)) tm_delay() {
   for (volatile uint8_t i = 0; i < 4; i++);

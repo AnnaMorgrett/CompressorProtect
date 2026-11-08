@@ -16,8 +16,9 @@
 #define DEBUG_TX_H
 
 #include <Arduino.h>
+#include "pins.h"
 
-#define DBG_PIN PC7
+#define DBG_PIN PIN_DEBUG_TX
 #define DBG_BUF_SIZE 256
 
 // Time of one bit in microseconds. 19200 baud is 52 us, and digitalWrite()

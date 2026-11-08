@@ -7,7 +7,7 @@
  * ============================================================================
  * COMPRESSOR PROTECT - HARDWARE PIN DEFINITIONS
  * Target MCU : CH32V003A4M6 (SOP-16 Package) / CH32V003F4P6 (TSSOP-20 Compatible)
- * Schematic  : archive_old/CH32Version.png (Source of Truth)
+ * Schematic  : CH32Version.png V1.0 (update 2026-11-01) - Source of Truth
  * ============================================================================
  * 
  * Pin Mapping Summary:
@@ -67,19 +67,19 @@
 // Digital Actuator Outputs
 #define PIN_RELAY           PD4     // Output (Pin 8 on SOP-16)  - Compressor Relay (Active HIGH)
 #define PIN_LED             PD5     // Output (Pin 9 on SOP-16)  - Status Yellow LED (Active HIGH)
-#define PIN_BUZZER          PC1     // Output (Pin 1 on SOP-16)  - Alarm Buzzer (Active HIGH)
+#define PIN_BUZZER          PC0     // Output (Pin 16 on SOP-16) - Alarm Buzzer (Active HIGH)
 
 // TM1637 4-Digit 7-Segment Display Bus
-#define PIN_TM_DIO          PC4     // I/O    (Pin 4 on SOP-16)  - Display Data
-#define PIN_TM_CLK          PC6     // Output (Pin 5 on SOP-16)  - Display Clock
+#define PIN_TM_DIO          PC3     // I/O    (Pin 3 on SOP-16)  - Display Data
+#define PIN_TM_CLK          PC4     // Output (Pin 4 on SOP-16)  - Display Clock
 
 // Thermistor Interfaces (Marked as Digital-Only / No ADC on CH32V003 Silicon)
-#define PIN_NTC1_RAW        PC3     // Pin 3 on SOP-16 (Compressor Shell - NO ADC MUX)
-#define PIN_NTC2_RAW        PC2     // Pin 2 on SOP-16 (Liquid-Line - NO ADC MUX)
+#define PIN_NTC1_RAW        PC2     // Pin 2 on SOP-16 (Compressor Shell - NO ADC MUX)
+#define PIN_NTC2_RAW        PC1     // Pin 1 on SOP-16 (Liquid-Line - NO ADC MUX)
 
 // Header / Calibration Pins
-#define PIN_CAL_DEBUG       PC7     // Pin 6 on SOP-16 (Calibration header / Optional SW UART)
-#define PIN_PROG_HEADER     PC0     // Pin 16 on SOP-16 (Programming header)
+#define PIN_CAL             PC6     // Pin 5 on SOP-16 (Calibration header H1 pin 3, no external pull-up)
+#define PIN_DEBUG_TX        PC7     // Pin 6 on SOP-16 (Debug TX header H1 pin 2, software UART)
 #define PIN_SWIO_DEBUG      PD1     // Pin 7 on SOP-16 (SWIO Single-wire debug / flashing)
 
 #endif // PINS_H
