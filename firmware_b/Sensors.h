@@ -6,7 +6,7 @@
 #include "Params.h"
 
 void initSensors();
-float readVoltage();
-float readCurrent();
+uint16_t readVoltage();
+uint16_t readCurrent();
 
 #endif

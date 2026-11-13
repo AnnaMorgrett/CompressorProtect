@@ -6,17 +6,9 @@
 #define PINS_H
 
 // --- Digital Inputs & Outputs ---
-#define PIN_CALIBRATION    PC6   // Pin 5  (SOP-16) - Calibration jumper (INPUT_PULLUP, Active LOW)
 #define PIN_RELAY          PD4   // Pin 8  (SOP-16) - Compressor relay (Active HIGH)
 #define PIN_LED_STATUS     PD5   // Pin 9  (SOP-16) - Status LED (Active HIGH)
 #define PIN_BUZZER         PC0   // Pin 16 (SOP-16) - Buzzer (Active HIGH)
-
-// --- Buzzer type ---
-// 0 = ACTIVE buzzer (built-in oscillator, beeps on plain DC)
-// 1 = PASSIVE buzzer (needs a square wave, bit-banged at BUZZER_FREQ_HZ)
-// Test: power-on self-test beep. If you only hear a faint tick, set this to 1.
-#define BUZZER_PASSIVE     0
-#define BUZZER_FREQ_HZ     2700
 
 // --- TM1637 4-Digit 7-Segment Display ---
 #define PIN_TM_DAT         PC3   // Pin 3  (SOP-16) - Data
@@ -32,8 +24,15 @@
 #define PIN_TEMP_DRYER     PC1   // Pin 1  (SOP-16) - NTC2 (Liquid-line) - no ADC
 #define PIN_TEMP_COMP      PC2   // Pin 2  (SOP-16) - NTC1 (Compressor shell) - no ADC
 
-// --- Debug / Programming Header ---
-#define PIN_DEBUG_TX       PC7   // Pin 6  (SOP-16) - optional software UART TX
-#define PIN_SWIO_DEBUG     PD1   // Pin 7  (SOP-16) - SWIO single-wire debug / flashing
+// --- Header H1 / Calibration / UART ---
+#define PIN_DEBUG_TX       PC6   // Pin 5  (SOP-16) - TX for Serial Monitor (Software UART)
+#define PIN_CALIBRATION    PC7   // Pin 6  (SOP-16) - Calibration jumper (INPUT_PULLUP, Active LOW)
+#define PIN_SWIO_DEBUG     PD1   // Pin 7  (SOP-16) - SWIO single-wire debug / flashing (PROG)
+
+// --- Buzzer type ---
+// 0 = ACTIVE buzzer (built-in oscillator, beeps on plain DC)
+// 1 = PASSIVE buzzer (needs a square wave, bit-banged at BUZZER_FREQ_HZ)
+#define BUZZER_PASSIVE     0
+#define BUZZER_FREQ_HZ     2700
 
 #endif

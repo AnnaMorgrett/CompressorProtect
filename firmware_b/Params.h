@@ -29,8 +29,9 @@ struct SystemParams {
   uint8_t  orpRestDelay_mins;          // 20 - 60
 }; // Size = 22 bytes
 
-#define PARAM_POWER_SURGE_LIMIT   270.0f
-#define PARAM_BLACKOUT_LIMIT      140.0f
+// Removed 'f' suffix to avoid pulling in float math
+#define PARAM_POWER_SURGE_LIMIT   270
+#define PARAM_BLACKOUT_LIMIT      140
 
 extern SystemParams params;
 

@@ -4,7 +4,7 @@
 #include "Sensors.h"
 #include "UI.h"
 
-#define ENABLE_SERIAL_DEBUG 0
+#define ENABLE_SERIAL_DEBUG 1
 
 #if ENABLE_SERIAL_DEBUG
 #define DBG_BEGIN() Serial.begin(9600)
@@ -16,32 +16,25 @@
 #define DBG_PRINTLN(x)  do {} while (0)
 #endif
 
-// ==========================================================
-// GLOBAL SYSTEM VARIABLES
-// ==========================================================
 OperatingMode currentMode = MODE_NORMAL_PROTECTION;
 SystemState currentState = STATE_STARTUP_DELAY;
 FaultType currentFault = FAULT_NONE;
 
-float sysVolt = 0.0f;
-float sysAmp = 0.0f;
+uint16_t sysVolt = 0;
+uint16_t sysAmp_mA = 0;
 
 unsigned long stateTimer = 0;
 unsigned long runningTimer = 0;
 unsigned long orpTimer = 0;
 unsigned long faultConditionTimer = 0;
+unsigned long serialTelemetryTimer = 0;
 
 uint8_t lraRetryCount = 0;
 
 void restartSystem();
 void beepMs(uint16_t ms);
-
-// Button chirp: sounds immediately (the main loop is too slow to time a 50 ms chirp)
 void triggerButtonChirp() { beepMs(40); }
 
-// ==========================================================
-// BUZZER DRIVER (blocking burst, works for active AND passive buzzers)
-// ==========================================================
 void beepMs(uint16_t ms) {
 #if BUZZER_PASSIVE
   const uint16_t halfPeriodUs = 500000UL / BUZZER_FREQ_HZ;
@@ -64,9 +57,6 @@ void beepMs(uint16_t ms) {
   digitalWrite(PIN_BUZZER, LOW);
 }
 
-// ==========================================================
-// WATCHDOG
-// ==========================================================
 static void initWatchdog() {
   IWDG_WriteAccessCmd(IWDG_WriteAccess_Enable);
   IWDG_SetPrescaler(IWDG_Prescaler_64);
@@ -75,9 +65,6 @@ static void initWatchdog() {
   IWDG_Enable();
 }
 
-// ==========================================================
-// SETUP
-// ==========================================================
 void setup() {
   DBG_BEGIN();
   initSensors();
@@ -96,40 +83,43 @@ void setup() {
   initUI();
   loadParams();
 
-  beepMs(150);   // power-on buzzer self-test (remove if not wanted)
+  DBG_PRINTLN("[SYS] PARAM LOADED");
 
   if (digitalRead(PIN_CALIBRATION) == LOW) {
     currentMode = MODE_CALIBRATION;
     digitalWrite(PIN_RELAY, HIGH);
+    DBG_PRINTLN(">>> MODE: CALIBRATION <<<");
   } else {
     int buttonAdc = analogRead(PIN_BUTTONS);
     if (buttonAdc >= 240 && buttonAdc <= 420) {
       currentMode = MODE_SETTING;
       digitalWrite(PIN_RELAY, LOW);
+      DBG_PRINTLN(">>> MODE: SETTING <<<");
     } else {
       currentMode = MODE_NORMAL_PROTECTION;
       digitalWrite(PIN_RELAY, LOW);
       stateTimer = millis();
+      DBG_PRINTLN(">>> MODE: PROTECT <<<");
     }
   }
 
   initWatchdog();
 }
 
-// ==========================================================
-// LOOP
-// ==========================================================
 void loop() {
   IWDG_ReloadCounter();
 
-  if (currentMode != MODE_SETTING) {   // sensors take ~80 ms; not needed in the setting menu
-    sysVolt = readVoltage();
-    sysAmp  = readCurrent();
+  if (currentMode != MODE_SETTING) {
+    sysVolt   = readVoltage();
+    sysAmp_mA = readCurrent();
   }
-  float sysAmp_mA = sysAmp * 1000.0f;
 
-  // MUST BE AT THE TOP: Ensures the buzzer and LED work inside the Menu!
   handleIndicators(); 
+
+  if (millis() - serialTelemetryTimer >= 1000) {
+    serialTelemetryTimer = millis();
+    sendSerialTelemetry();
+  }
 
   if (currentMode == MODE_CALIBRATION) { handleCalibrationMode(); return; }
   if (currentMode == MODE_SETTING)     { handleSettingMode();     return; }
@@ -215,12 +205,9 @@ void loop() {
       break;
   }
 
-  updateDisplay(sysVolt, sysAmp);
+  updateDisplay(sysVolt, sysAmp_mA);
 }
 
-// ==========================================================
-// HELPERS & INDICATORS
-// ==========================================================
 void triggerFault(FaultType fault) {
   if (currentState == STATE_FAULT && currentFault == fault) return;
   currentFault = fault;
@@ -233,7 +220,7 @@ void checkFaultDelay(FaultType fault, uint8_t delaySeconds) {
   if (millis() - faultConditionTimer >= (delaySeconds * 1000UL)) triggerFault(fault);
 }
 
-bool isVoltageSafe(float v) {
+bool isVoltageSafe(uint16_t v) {
   return (v > params.uvpLimit && v < params.ovpLimit);
 }
 
@@ -243,6 +230,14 @@ void restartSystem() {
   IWDG_SetReload(0);
   IWDG_ReloadCounter();
   while (1) {}
+}
+
+void sendSerialTelemetry() {
+#if ENABLE_SERIAL_DEBUG
+  Serial.print("V=");  Serial.print(sysVolt);
+  Serial.print(" A="); Serial.print(sysAmp_mA); // mA
+  Serial.print(" ST="); Serial.println(currentState);
+#endif
 }
 
 void handleIndicators() {
@@ -258,7 +253,6 @@ void handleIndicators() {
 
   unsigned long currentMillis = millis();
 
-  // 1. LED Status
   if (currentState == STATE_RUNNING) {
     digitalWrite(PIN_LED_STATUS, HIGH);
   } else if (currentState == STATE_STARTUP_DELAY) {
@@ -291,7 +285,6 @@ void handleIndicators() {
     }
   }
 
-  // 2. Buzzer (chirp is handled directly in triggerButtonChirp)
   if (currentState == STATE_FAULT || currentState == STATE_LOCKOUT) {
     unsigned long interval = (currentState == STATE_LOCKOUT) ? 900000UL : 1800000UL;
     if (!isBeeping && (currentMillis - lastBuzzerInterval >= interval)) {
@@ -300,9 +293,9 @@ void handleIndicators() {
       nextBeepTime = currentMillis;
     }
     if (isBeeping && (long)(currentMillis - nextBeepTime) >= 0) {
-      beepMs(300);                         // relay is already OFF in fault/lockout
+      beepMs(300);
       beepCount++;
-      nextBeepTime = millis() + 300;       // 300 ms gap
+      nextBeepTime = millis() + 300;
       if (beepCount >= 5) {
         isBeeping = false;
         lastBuzzerInterval = millis();
