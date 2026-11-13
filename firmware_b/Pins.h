@@ -11,6 +11,13 @@
 #define PIN_LED_STATUS     PD5   // Pin 9  (SOP-16) - Status LED (Active HIGH)
 #define PIN_BUZZER         PC0   // Pin 16 (SOP-16) - Buzzer (Active HIGH)
 
+// --- Buzzer type ---
+// 0 = ACTIVE buzzer (built-in oscillator, beeps on plain DC)
+// 1 = PASSIVE buzzer (needs a square wave, bit-banged at BUZZER_FREQ_HZ)
+// Test: power-on self-test beep. If you only hear a faint tick, set this to 1.
+#define BUZZER_PASSIVE     0
+#define BUZZER_FREQ_HZ     2700
+
 // --- TM1637 4-Digit 7-Segment Display ---
 #define PIN_TM_DAT         PC3   // Pin 3  (SOP-16) - Data
 #define PIN_TM_CLK         PC4   // Pin 4  (SOP-16) - Clock

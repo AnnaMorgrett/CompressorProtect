@@ -25,8 +25,6 @@ FaultType currentFault = FAULT_NONE;
 
 float sysVolt = 0.0f;
 float sysAmp = 0.0f;
-float sysTemp1 = 0.0f;
-float sysTemp2 = 0.0f;
 
 unsigned long stateTimer = 0;
 unsigned long runningTimer = 0;
@@ -34,12 +32,37 @@ unsigned long orpTimer = 0;
 unsigned long faultConditionTimer = 0;
 
 uint8_t lraRetryCount = 0;
-uint8_t flowRetryCount = 0;
-
-float initialTempNTC2 = 0.0;
-bool isFlowChecked = false;
 
 void restartSystem();
+void beepMs(uint16_t ms);
+
+// Button chirp: sounds immediately (the main loop is too slow to time a 50 ms chirp)
+void triggerButtonChirp() { beepMs(40); }
+
+// ==========================================================
+// BUZZER DRIVER (blocking burst, works for active AND passive buzzers)
+// ==========================================================
+void beepMs(uint16_t ms) {
+#if BUZZER_PASSIVE
+  const uint16_t halfPeriodUs = 500000UL / BUZZER_FREQ_HZ;
+  unsigned long end = millis() + ms;
+  while ((long)(millis() - end) < 0) {
+    digitalWrite(PIN_BUZZER, HIGH);
+    delayMicroseconds(halfPeriodUs);
+    digitalWrite(PIN_BUZZER, LOW);
+    delayMicroseconds(halfPeriodUs);
+    IWDG_ReloadCounter();
+  }
+#else
+  digitalWrite(PIN_BUZZER, HIGH);
+  unsigned long end = millis() + ms;
+  while ((long)(millis() - end) < 0) {
+    IWDG_ReloadCounter();
+    delay(5);
+  }
+#endif
+  digitalWrite(PIN_BUZZER, LOW);
+}
 
 // ==========================================================
 // WATCHDOG
@@ -73,6 +96,8 @@ void setup() {
   initUI();
   loadParams();
 
+  beepMs(150);   // power-on buzzer self-test (remove if not wanted)
+
   if (digitalRead(PIN_CALIBRATION) == LOW) {
     currentMode = MODE_CALIBRATION;
     digitalWrite(PIN_RELAY, HIGH);
@@ -97,12 +122,14 @@ void setup() {
 void loop() {
   IWDG_ReloadCounter();
 
-  sysVolt  = readVoltage();
-  sysAmp   = readCurrent();
-  sysTemp1 = readTemp1();
-  sysTemp2 = readTemp2();
-  
+  if (currentMode != MODE_SETTING) {   // sensors take ~80 ms; not needed in the setting menu
+    sysVolt = readVoltage();
+    sysAmp  = readCurrent();
+  }
   float sysAmp_mA = sysAmp * 1000.0f;
+
+  // MUST BE AT THE TOP: Ensures the buzzer and LED work inside the Menu!
+  handleIndicators(); 
 
   if (currentMode == MODE_CALIBRATION) { handleCalibrationMode(); return; }
   if (currentMode == MODE_SETTING)     { handleSettingMode();     return; }
@@ -114,15 +141,13 @@ void loop() {
 
     case STATE_STARTUP_DELAY:
       digitalWrite(PIN_RELAY, LOW);
-      if (!isVoltageSafe(sysVolt) || (params.ntc1Enable && sysTemp1 > (params.otpLimit - params.otpHysteresis))) {
+      if (!isVoltageSafe(sysVolt)) {
         stateTimer = millis();
       } else if (millis() - stateTimer >= (params.timeDelay_mins * 60000UL)) {
-        currentFault    = FAULT_NONE;
-        initialTempNTC2 = sysTemp2;
-        isFlowChecked   = false;
-        runningTimer    = millis();
-        orpTimer        = millis();
-        currentState    = STATE_RUNNING;
+        currentFault = FAULT_NONE;
+        runningTimer = millis();
+        orpTimer     = millis();
+        currentState = STATE_RUNNING;
         digitalWrite(PIN_RELAY, HIGH);
       }
       break;
@@ -131,8 +156,6 @@ void loop() {
       if (sysVolt > params.ovpLimit)      checkFaultDelay(FAULT_OVP, params.ovpUvpDelay);
       else if (sysVolt < params.uvpLimit) checkFaultDelay(FAULT_UVP, params.ovpUvpDelay);
       else                                faultConditionTimer = millis();
-
-      if (params.ntc1Enable && sysTemp1 >= params.otpLimit) triggerFault(FAULT_OTP);
 
       unsigned long runDuration = millis() - runningTimer;
       if (runDuration <= (params.lraTime * 1000UL)) {
@@ -155,21 +178,6 @@ void loop() {
         }
       }
 
-      if (params.ntc2Enable && !isFlowChecked && runDuration >= (params.refFlowDelay_mins * 60000UL)) {
-        isFlowChecked = true;
-        if (sysTemp2 < (initialTempNTC2 + 5.0f)) { // Hardcoded delta temp of 5C
-          flowRetryCount++;
-          if (flowRetryCount >= params.flowFaultRetryLimit) {
-            currentState = STATE_LOCKOUT;
-            digitalWrite(PIN_RELAY, LOW);
-          } else {
-            triggerFault(FAULT_REF_FLOW);
-          }
-        } else {
-          flowRetryCount = 0;
-        }
-      }
-
       if (sysAmp_mA < (params.minCurrentThreshold_x10 * 10)) {
         orpTimer = millis();
       } else if (millis() - orpTimer >= (params.orpTimeLimit_hours * 3600000UL)) {
@@ -185,8 +193,7 @@ void loop() {
       bool readyToRecover = false;
       if      (currentFault == FAULT_OVP && sysVolt <= (params.ovpLimit - params.voltageHysteresis)) readyToRecover = true;
       else if (currentFault == FAULT_UVP && sysVolt >= (params.uvpLimit + params.voltageHysteresis)) readyToRecover = true;
-      else if (currentFault == FAULT_OTP && sysTemp1 <= (params.otpLimit - params.otpHysteresis))     readyToRecover = true;
-      else if (currentFault != FAULT_OVP && currentFault != FAULT_UVP && currentFault != FAULT_OTP)   readyToRecover = true;
+      else if (currentFault != FAULT_OVP && currentFault != FAULT_UVP) readyToRecover = true;
 
       if (readyToRecover) {
         currentState = STATE_STARTUP_DELAY;
@@ -209,7 +216,6 @@ void loop() {
   }
 
   updateDisplay(sysVolt, sysAmp);
-  handleIndicators();
 }
 
 // ==========================================================
@@ -246,13 +252,13 @@ void handleIndicators() {
   static bool ledState = false;
 
   static unsigned long lastBuzzerInterval = millis() - 1800000UL;
-  static unsigned long lastBuzzerToggle = 0;
+  static unsigned long nextBeepTime = 0;
   static uint8_t beepCount = 0;
   static bool isBeeping = false;
-  static bool buzzerState = false;
 
   unsigned long currentMillis = millis();
 
+  // 1. LED Status
   if (currentState == STATE_RUNNING) {
     digitalWrite(PIN_LED_STATUS, HIGH);
   } else if (currentState == STATE_STARTUP_DELAY) {
@@ -285,27 +291,21 @@ void handleIndicators() {
     }
   }
 
+  // 2. Buzzer (chirp is handled directly in triggerButtonChirp)
   if (currentState == STATE_FAULT || currentState == STATE_LOCKOUT) {
     unsigned long interval = (currentState == STATE_LOCKOUT) ? 900000UL : 1800000UL;
     if (!isBeeping && (currentMillis - lastBuzzerInterval >= interval)) {
       isBeeping = true;
       beepCount = 0;
-      lastBuzzerToggle = currentMillis;
-      buzzerState = true;
-      digitalWrite(PIN_BUZZER, HIGH);
+      nextBeepTime = currentMillis;
     }
-    if (isBeeping) {
-      if (currentMillis - lastBuzzerToggle >= 300) {
-        lastBuzzerToggle = currentMillis;
-        buzzerState = !buzzerState;
-        digitalWrite(PIN_BUZZER, buzzerState);
-        if (!buzzerState) {
-          beepCount++;
-          if (beepCount >= 5) {
-            isBeeping = false;
-            lastBuzzerInterval = currentMillis;
-          }
-        }
+    if (isBeeping && (long)(currentMillis - nextBeepTime) >= 0) {
+      beepMs(300);                         // relay is already OFF in fault/lockout
+      beepCount++;
+      nextBeepTime = millis() + 300;       // 300 ms gap
+      if (beepCount >= 5) {
+        isBeeping = false;
+        lastBuzzerInterval = millis();
       }
     }
   } else {

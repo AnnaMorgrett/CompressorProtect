@@ -8,7 +8,5 @@
 void initSensors();
 float readVoltage();
 float readCurrent();
-float readTemp1();
-float readTemp2();
 
 #endif
