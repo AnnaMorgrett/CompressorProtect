@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <TM1637Display.h>
 
-// Pindahkan Enum dari file utama ke sini agar bisa diakses oleh modul UI
 enum OperatingMode {
   MODE_NORMAL_PROTECTION,
   MODE_CALIBRATION,
@@ -32,7 +31,6 @@ enum FaultType {
   FAULT_REF_FLOW
 };
 
-// Deklarasi variabel global dari main.ino (extern) agar UI bisa membacanya
 extern OperatingMode currentMode;
 extern SystemState currentState;
 extern FaultType currentFault;
@@ -40,14 +38,13 @@ extern unsigned long stateTimer;
 extern uint8_t lraRetryCount;
 extern uint8_t flowRetryCount;
 
-extern float sysVolt;
-extern float sysAmp;
-extern float sysTemp1;
-extern float sysTemp2;
+extern int sysVolt;
+extern int sysAmp;
+extern int sysTemp1;
+extern int sysTemp2;
 
-// Deklarasi fungsi UI
 void initUI();
-void updateDisplay(float currentV, float currentA);
+void updateDisplay(int currentV, int currentA); // Diubah ke int
 void handleSettingMode();
 void handleCalibrationMode();
 extern void restartSystem();

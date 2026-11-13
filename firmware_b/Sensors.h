@@ -5,11 +5,10 @@
 #include "Pins.h"
 #include "Params.h"
 
-// Deklarasi fungsi-fungsi sensor agar bisa dipanggil di file utama
 void initSensors();
-float readVoltage();
-float readCurrent();
-float readTemp1();
-float readTemp2();
+int readVoltage();
+int readCurrent();
+int readTemp1();
+int readTemp2();
 
 #endif

@@ -3,52 +3,40 @@
 
 #include <EEPROM.h>
 
-// ==========================================================
-// SYSTEM PARAMETERS (EEPROM DATA)
-// ==========================================================
-
 struct SystemParams {
-  // 1. Basic & Calibration
-  uint16_t timeDelay;         // Default: 300 detik (5 Menit)
-  float currentMultiplier;    // Default: 0.5
-  float voltageMultiplier;    // Default: 0.5
+  uint16_t timeDelay;         
+  int currentMultiplier;      // Integer (Misal 470 untuk mewakili 0.470)
+  int voltageMultiplier;      // Integer (Misal 855 untuk mewakili 0.855)
   
-  // 2. Voltage Protection (Satuan: Volt)
-  uint16_t ovpLimit;          // Default: 250
-  uint16_t uvpLimit;          // Default: 180
-  uint8_t voltageHysteresis;  // Default: 10
-  uint8_t ovpUvpDelay;        // Default: 5 detik
-  uint16_t powerSurgeLimit;   // Default: 270 (Instant Trip)
-  uint16_t blackoutLimit;     // Default: 140 (Instant Trip)
+  uint16_t ovpLimit;          
+  uint16_t uvpLimit;          
+  uint8_t voltageHysteresis;  
+  uint8_t ovpUvpDelay;        
+  uint16_t powerSurgeLimit;   
+  uint16_t blackoutLimit;     
 
-  // 3. Current Protection (Satuan: Ampere & Detik)
-  float lraLimit;             // Default: 5.0 A (Batas Arus Start/Macet)
-  uint8_t lraTime;            // Default: 2 detik (Toleransi waktu inrush)
-  uint8_t lraRetryLimit;      // Default: 3 kali (Lockout jika gagal start terus)
+  int lraLimit;               // Integer dalam mA (Misal 5000)
+  uint8_t lraTime;            
+  uint8_t lraRetryLimit;      
   
-  float ocpLimit;             // Default: 1.5 A (Batas Arus Overload saat running)
-  uint8_t ocpDelay;           // Default: 4 detik
+  int ocpLimit;               // Integer dalam mA (Misal 1500)
+  uint8_t ocpDelay;           
   
-  float ucpLimit;             // Default: 0.3 A (Under Current/Freon Bocor - 0=Disable)
-  
-  // BATAS MINIMAL ARUS KOMPRESOR JALAN (Filter lampu kulkas)
-  float minCurrentThreshold;  // Default: 0.25 A
+  int ucpLimit;               // Integer dalam mA (Misal 300)
+  int minCurrentThreshold;    // Integer dalam mA (Misal 250)
 
-  // 4. Temperature Protection (NTC1 - Compressor)
-  bool ntc1Enable;            // Default: 0 (Disable)
-  uint8_t otpLimit;           // Default: 85 C
-  uint8_t otpHysteresis;      // Default: 10 C (Recovery at 75 C)
+  bool ntc1Enable;            
+  uint8_t otpLimit;           
+  uint8_t otpHysteresis;      
 
-  // 5. Refrigerant Flow (NTC2 & UCP Fault)
-  int8_t tempOffset;          // Default: 0 (Offset kalibrasi suhu C-3)
-  bool ntc2Enable;            // Default: 0 (Disable)
-  uint16_t refFlowDelay;      // Default: 300 detik (5 Menit) - Diubah ke uint16_t agar muat 300
-  uint8_t refDeltaTemp;       // Default: 5 C (Kenaikan suhu minimal dari suhu awal)
-  uint8_t flowFaultRetryLimit;// Default: 5 kali (Lockout jika bocor/mampet terus)
+  int8_t tempOffset;          
+  bool ntc2Enable;            
+  uint16_t refFlowDelay;      
+  uint8_t refDeltaTemp;       
+  uint8_t flowFaultRetryLimit;
 
-  // 6. Over Running Protection (ORP)
-  uint16_t orpTimeLimit;      // Default: 420 Menit (7 Jam)
-  uint16_t orpRestDelay;      // Default: 30 Menit (Waktu istirahat paksa)
+  uint16_t orpTimeLimit;      
+  uint16_t orpRestDelay;      
 };
 
 extern SystemParams params;
