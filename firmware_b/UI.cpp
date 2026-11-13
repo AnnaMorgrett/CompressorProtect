@@ -2,6 +2,7 @@
 #include "Pins.h"
 #include "Params.h"
 #include "Sensors.h"
+#include <stddef.h> // For offsetof()
 
 TM1637Display display(PIN_TM_CLK, PIN_TM_DAT);
 
@@ -18,12 +19,9 @@ const uint8_t LTR_S = SEG_A | SEG_C | SEG_D | SEG_F | SEG_G;
 const uint8_t LTR_t = SEG_D | SEG_E | SEG_F | SEG_G;
 const uint8_t LTR_A = SEG_A | SEG_B | SEG_C | SEG_E | SEG_F | SEG_G;
 const uint8_t LTR_K = SEG_B | SEG_C | SEG_E | SEG_F | SEG_G;
-
+const uint8_t LTR_P = SEG_A | SEG_B | SEG_E | SEG_F | SEG_G;
 const uint8_t BLANK = 0x00;
 
-// ==========================================
-// SHARED 7-SEGMENT MESSAGES (flash-resident)
-// ==========================================
 static const uint8_t MSG_SETT[] = { LTR_S, LTR_E, LTR_t, LTR_t };
 static const uint8_t MSG_SAVE[] = { LTR_S, LTR_A, LTR_U, LTR_E };
 static const uint8_t MSG_OK[]   = { LTR_O, LTR_K, BLANK, BLANK };
@@ -35,11 +33,60 @@ static const uint8_t MSG_C1[]   = { LTR_C, SEG_G, BLANK, 0x06 };
 static const uint8_t MSG_C2[]   = { LTR_C, SEG_G, BLANK, 0x5B };
 
 // ==========================================
-// INIT UI — single splash
+// COMPACT MENU TABLE
+// ==========================================
+struct ParamDef {
+  uint8_t offset;
+  uint8_t size;       // 1 or 2 bytes
+  int16_t min_ui;
+  int16_t max_ui;
+  uint8_t step_ui;
+  int8_t  scale;      // >0: ui = raw * scale. <0: ui = raw / (-scale)
+};
+
+const ParamDef menuTable[20] = {
+  { offsetof(SystemParams, timeDelay_mins),          1,  2,  10,  1, 1 }, // S-01
+  { offsetof(SystemParams, ovpLimit),                1, 230, 260, 10, 1 }, // S-02
+  { offsetof(SystemParams, uvpLimit),                1, 150, 200, 10, 1 }, // S-03
+  { offsetof(SystemParams, ovpUvpDelay),             1,  3,  10,  1, 1 }, // S-04
+  { offsetof(SystemParams, voltageHysteresis),       1, 10,  40,  1, 1 }, // S-05
+  { offsetof(SystemParams, lraLimit_mA),             2, 800, 5000, 100, 1 }, // S-06
+  { offsetof(SystemParams, lraTime),                 1,  1,   5,  1, 1 }, // S-07
+  { offsetof(SystemParams, lraRetryLimit),           1,  2,   5,  1, 1 }, // S-08
+  { offsetof(SystemParams, ocpLimit_mA),             2, 300, 4500, 50, 1 }, // S-09
+  { offsetof(SystemParams, ocpDelay),                1,  2,  10,  1, 1 }, // S-10
+  { offsetof(SystemParams, ucpLimit_x10),            1,  0, 100,  5, 10 }, // S-11
+  { offsetof(SystemParams, minCurrentThreshold_x10), 1,  0,  30,  5, 10 }, // S-12
+  { offsetof(SystemParams, ntc1Enable),              1,  0,   1,  1, 1 }, // S-13
+  { offsetof(SystemParams, otpLimit),                1, 70,  90,  1, 1 }, // S-14
+  { offsetof(SystemParams, otpHysteresis),           1,  5,  20,  1, 1 }, // S-15
+  { offsetof(SystemParams, ntc2Enable),              1,  0,   1,  1, 1 }, // S-16
+  { offsetof(SystemParams, refFlowDelay_mins),       1,  2,  10,  1, 1 }, // S-17
+  { offsetof(SystemParams, flowFaultRetryLimit),     1,  2,   5,  1, 1 }, // S-18
+  { offsetof(SystemParams, orpTimeLimit_hours),      1,  2,  12,  1, 1 }, // S-19
+  { offsetof(SystemParams, orpRestDelay_mins),       1, 20,  60,  5, 1 }  // S-20
+};
+
+int32_t getParamVal(uint8_t idx) {
+  const uint8_t* p = (const uint8_t*)&params + menuTable[idx].offset;
+  int32_t raw = (menuTable[idx].size == 1) ? *(const uint8_t*)p : *(const uint16_t*)p;
+  if (menuTable[idx].scale > 0) return raw * menuTable[idx].scale;
+  return raw / (-menuTable[idx].scale);
+}
+
+void setParamVal(uint8_t idx, int32_t ui) {
+  uint8_t* p = (uint8_t*)&params + menuTable[idx].offset;
+  int32_t raw = (menuTable[idx].scale > 0) ? (ui / menuTable[idx].scale) : (ui * -menuTable[idx].scale);
+  if (menuTable[idx].size == 1) *(uint8_t*)p = (uint8_t)raw;
+  else *(uint16_t*)p = (uint16_t)raw;
+}
+
+// ==========================================
+// INIT UI
 // ==========================================
 void initUI() {
   display.setBrightness(5);
-  const uint8_t msgSCP[] = { LTR_S, LTR_C, 0x73, BLANK };  // "SCP "
+  const uint8_t msgSCP[] = { LTR_S, LTR_C, 0x73, BLANK };
   display.setSegments(msgSCP);
   delay(1500);
   display.clear();
@@ -70,9 +117,9 @@ void updateDisplay(float currentV, float currentA) {
 
   long remainingSec = 0;
   if (currentState == STATE_STARTUP_DELAY) {
-    remainingSec = (long)(params.timeDelay * 1000UL) - (long)(millis() - stateTimer);
+    remainingSec = (long)(params.timeDelay_mins * 60000UL) - (long)(millis() - stateTimer);
   } else if (currentState == STATE_ORP_REST) {
-    remainingSec = (long)(30UL * 60000UL) - (long)(millis() - stateTimer);   // hardcoded 30 min
+    remainingSec = (long)(params.orpRestDelay_mins * 60000UL) - (long)(millis() - stateTimer);
   }
 
   if (remainingSec < 0) remainingSec = 0;
@@ -122,14 +169,13 @@ void updateDisplay(float currentV, float currentA) {
 }
 
 // ==========================================
-// SETTING MENU — P-01..P-11 (11 params) + SAUE(12) + RSt(13)
-// P-12 "orpTimeLimit" removed — hardcoded to 420 min (7 h)
+// TABLE-DRIVEN SETTING MENU (22 Positions)
 // ==========================================
 void handleSettingMode() {
   display.setBrightness(4);
   static uint8_t menuState = 0;
   static int8_t  currentMenu = 1;
-  static float   editValue = 0.0f;
+  static int32_t editValue = 0;
 
   static uint8_t lastBtn = 0;
   static unsigned long btnPressTime = 0;
@@ -169,7 +215,7 @@ void handleSettingMode() {
       break;
 
     case 2:
-      if (currentMenu <= 11) {
+      if (currentMenu <= 20) {
         uint8_t dataS[] = {
           LTR_S,
           SEG_G,
@@ -178,80 +224,38 @@ void handleSettingMode() {
         };
         display.setSegments(dataS);
       }
-      else if (currentMenu == 12) display.setSegments(MSG_SAVE);
-      else if (currentMenu == 13) display.setSegments(MSG_RST);
+      else if (currentMenu == 21) display.setSegments(MSG_SAVE);
+      else if (currentMenu == 22) display.setSegments(MSG_RST);
 
-      if (clickEvent == 1 && currentMenu < 13) currentMenu++;
+      if (clickEvent == 1 && currentMenu < 22) currentMenu++;
       if (clickEvent == 3 && currentMenu > 1)  currentMenu--;
 
       if (clickEvent == 2) {
-        if (currentMenu == 12) {
-          display.setSegments(MSG_OK);
-          saveParams();
-          delay(1000);
-          restartSystem();
+        if (currentMenu == 21) {
+          display.setSegments(MSG_OK); saveParams(); delay(1000); restartSystem();
         }
-        else if (currentMenu == 13) {
-          display.setSegments(MSG_OK);
-          resetToDefaultParams();
-          delay(1000);
-          restartSystem();
+        else if (currentMenu == 22) {
+          display.setSegments(MSG_OK); resetToDefaultParams(); delay(1000); restartSystem();
         }
         else {
-          if      (currentMenu == 1)  editValue = params.timeDelay / 60.0f;
-          else if (currentMenu == 2)  editValue = (float)params.ovpLimit;
-          else if (currentMenu == 3)  editValue = (float)params.uvpLimit;
-          else if (currentMenu == 4)  editValue = (float)params.ovpUvpDelay;
-          else if (currentMenu == 5)  editValue = (float)params.voltageHysteresis;
-          else if (currentMenu == 6)  editValue = (float)params.lraLimit_x100 * 10.0f;
-          else if (currentMenu == 7)  editValue = (float)params.lraTime;
-          else if (currentMenu == 8)  editValue = (float)params.lraRetryLimit;
-          else if (currentMenu == 9)  editValue = (float)params.ocpLimit_x100 * 10.0f;
-          else if (currentMenu == 10) editValue = (float)params.ocpDelay;
-          else if (currentMenu == 11) editValue = (float)params.minCurrentThreshold_x100 * 10.0f;
-
+          editValue = getParamVal(currentMenu - 1);
           menuState = 3;
         }
       }
       break;
 
     case 3: {
-      display.showNumberDec((int)editValue, false, 4, 0);
+      display.showNumberDec(editValue, false, 4, 0);
+      uint8_t idx = currentMenu - 1;
 
-      float stepValue = 1.0f;
-      if      (currentMenu == 2 || currentMenu == 3) stepValue = 10.0f;
-      else if (currentMenu == 6)                     stepValue = 100.0f;
-      else if (currentMenu == 9)                     stepValue = 50.0f;
-      else if (currentMenu == 11)                    stepValue = 50.0f;
+      if (clickEvent == 1) editValue += menuTable[idx].step_ui;
+      if (clickEvent == 3) editValue -= menuTable[idx].step_ui;
 
-      if (clickEvent == 1) editValue += stepValue;
-      if (clickEvent == 3) editValue -= stepValue;
-
-      if      (currentMenu == 1)  { if(editValue>10.0f)  editValue=10.0f;    if(editValue<2.0f)   editValue=2.0f;  }
-      else if (currentMenu == 2)  { if(editValue>260.0f) editValue=260.0f;   if(editValue<230.0f) editValue=230.0f;}
-      else if (currentMenu == 3)  { if(editValue>200.0f) editValue=200.0f;   if(editValue<150.0f) editValue=150.0f;}
-      else if (currentMenu == 4)  { if(editValue>10.0f)  editValue=10.0f;    if(editValue<3.0f)   editValue=3.0f;  }
-      else if (currentMenu == 5)  { if(editValue>40.0f)  editValue=40.0f;    if(editValue<10.0f)  editValue=10.0f; }
-      else if (currentMenu == 6)  { if(editValue>5000.0f)editValue=5000.0f;  if(editValue<800.0f) editValue=800.0f;}
-      else if (currentMenu == 7)  { if(editValue>5.0f)   editValue=5.0f;     if(editValue<1.0f)   editValue=1.0f;  }
-      else if (currentMenu == 8)  { if(editValue>5.0f)   editValue=5.0f;     if(editValue<2.0f)   editValue=2.0f;  }
-      else if (currentMenu == 9)  { if(editValue>4500.0f)editValue=4500.0f;  if(editValue<300.0f) editValue=300.0f;}
-      else if (currentMenu == 10) { if(editValue>10.0f)  editValue=10.0f;    if(editValue<2.0f)   editValue=2.0f;  }
-      else if (currentMenu == 11) { if(editValue>300.0f) editValue=400.0f;   if(editValue<150.0f) editValue=0.0f;  }
+      if (editValue < menuTable[idx].min_ui) editValue = menuTable[idx].min_ui;
+      if (editValue > menuTable[idx].max_ui) editValue = menuTable[idx].max_ui;
 
       if (clickEvent == 2 || longPressEvent) {
-        if      (currentMenu == 1)  params.timeDelay = (uint16_t)editValue * 60;
-        else if (currentMenu == 2)  params.ovpLimit = (uint16_t)editValue;
-        else if (currentMenu == 3)  params.uvpLimit = (uint16_t)editValue;
-        else if (currentMenu == 4)  params.ovpUvpDelay = (uint8_t)editValue;
-        else if (currentMenu == 5)  params.voltageHysteresis = (uint8_t)editValue;
-        else if (currentMenu == 6)  params.lraLimit_x100 = (uint16_t)(editValue / 10.0f);
-        else if (currentMenu == 7)  params.lraTime = (uint8_t)editValue;
-        else if (currentMenu == 8)  params.lraRetryLimit = (uint8_t)editValue;
-        else if (currentMenu == 9)  params.ocpLimit_x100 = (uint16_t)(editValue / 10.0f);
-        else if (currentMenu == 10) params.ocpDelay = (uint8_t)editValue;
-        else if (currentMenu == 11) params.minCurrentThreshold_x100 = (uint16_t)(editValue / 10.0f);
-
+        setParamVal(idx, editValue);
         menuState = 2;
       }
       break;
@@ -260,13 +264,13 @@ void handleSettingMode() {
 }
 
 // ==========================================
-// CALIBRATION MENU — 5 items: U-rt, A-rt, C-1, C-2, SAUE
+// CALIBRATION MENU — (U-rt, A-rt, C-1, C-2, SAUE)
 // ==========================================
 void handleCalibrationMode() {
   display.setBrightness(4);
   static uint8_t menuState = 0;
   static int8_t  currentMenu = 1;
-  static float   editValue = 0.0f;
+  static int32_t editValue = 0;
 
   static uint8_t lastBtn = 0;
   static unsigned long btnPressTime = 0;
@@ -317,14 +321,11 @@ void handleCalibrationMode() {
 
       if (clickEvent == 2) {
         if (currentMenu == 5) {
-          display.setSegments(MSG_OK);
-          saveParams();
-          delay(1000);
-          menuState = 2;
+          display.setSegments(MSG_OK); saveParams(); delay(1000); menuState = 2;
         }
         else {
-          if      (currentMenu == 3) editValue = params.voltageMultiplier_x1000 / 1000.0f;
-          else if (currentMenu == 4) editValue = params.currentMultiplier_x1000 / 1000.0f;
+          if      (currentMenu == 3) editValue = params.voltageMultiplier_x100;
+          else if (currentMenu == 4) editValue = params.currentMultiplier_x100;
           menuState = 3;
         }
       }
@@ -338,21 +339,21 @@ void handleCalibrationMode() {
         lastLiveUpdate = millis();
         if      (currentMenu == 1) displayedLiveVal = (int)sysVolt;
         else if (currentMenu == 2) displayedLiveVal = (int)(sysAmp * 1000.0f);
-        else if (currentMenu == 3 || currentMenu == 4) displayedLiveVal = (int)(editValue * 1000.0f);
+        else if (currentMenu == 3 || currentMenu == 4) displayedLiveVal = editValue * 10; // show 342 as 3420
       }
 
       display.showNumberDec(displayedLiveVal, false, 4, 0);
 
       if (currentMenu == 3 || currentMenu == 4) {
-        if (clickEvent == 1) editValue += 0.001f;
-        if (clickEvent == 3) editValue -= 0.001f;
-        if (editValue > 5.0f)   editValue = 5.0f;
-        if (editValue < 0.001f) editValue = 0.001f;
+        if (clickEvent == 1) editValue += 1;
+        if (clickEvent == 3) editValue -= 1;
+        if (editValue > 500) editValue = 500;
+        if (editValue < 1)   editValue = 1;
       }
 
       if (clickEvent == 2 || longPressEvent) {
-        if (currentMenu == 3) params.voltageMultiplier_x1000 = (uint16_t)(editValue * 1000.0f);
-        if (currentMenu == 4) params.currentMultiplier_x1000 = (uint16_t)(editValue * 1000.0f);
+        if (currentMenu == 3) params.voltageMultiplier_x100 = (uint8_t)editValue;
+        if (currentMenu == 4) params.currentMultiplier_x100 = (uint8_t)editValue;
         menuState = 2;
       }
       break;

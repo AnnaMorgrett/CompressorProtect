@@ -12,12 +12,8 @@
 #define DBG_PRINTLN(x) Serial.println(x)
 #else
 #define DBG_BEGIN()
-#define DBG_PRINT(x) \
-  do { \
-  } while (0)
-#define DBG_PRINTLN(x) \
-  do { \
-  } while (0)
+#define DBG_PRINT(x)    do {} while (0)
+#define DBG_PRINTLN(x)  do {} while (0)
 #endif
 
 // ==========================================================
@@ -29,6 +25,8 @@ FaultType currentFault = FAULT_NONE;
 
 float sysVolt = 0.0f;
 float sysAmp = 0.0f;
+float sysTemp1 = 0.0f;
+float sysTemp2 = 0.0f;
 
 unsigned long stateTimer = 0;
 unsigned long runningTimer = 0;
@@ -36,6 +34,10 @@ unsigned long orpTimer = 0;
 unsigned long faultConditionTimer = 0;
 
 uint8_t lraRetryCount = 0;
+uint8_t flowRetryCount = 0;
+
+float initialTempNTC2 = 0.0;
+bool isFlowChecked = false;
 
 void restartSystem();
 
@@ -95,90 +97,109 @@ void setup() {
 void loop() {
   IWDG_ReloadCounter();
 
-  sysVolt = readVoltage();
-  sysAmp = readCurrent();
+  sysVolt  = readVoltage();
+  sysAmp   = readCurrent();
+  sysTemp1 = readTemp1();
+  sysTemp2 = readTemp2();
+  
+  float sysAmp_mA = sysAmp * 1000.0f;
 
-  if (currentMode == MODE_CALIBRATION) {
-    handleCalibrationMode();
-    return;
-  }
-  if (currentMode == MODE_SETTING) {
-    handleSettingMode();
-    return;
-  }
+  if (currentMode == MODE_CALIBRATION) { handleCalibrationMode(); return; }
+  if (currentMode == MODE_SETTING)     { handleSettingMode();     return; }
 
   if (sysVolt >= PARAM_POWER_SURGE_LIMIT) triggerFault(FAULT_SURGE);
-  if (sysVolt <= PARAM_BLACKOUT_LIMIT) triggerFault(FAULT_BLACKOUT);
+  if (sysVolt <= PARAM_BLACKOUT_LIMIT)    triggerFault(FAULT_BLACKOUT);
 
   switch (currentState) {
 
     case STATE_STARTUP_DELAY:
       digitalWrite(PIN_RELAY, LOW);
-      if (!isVoltageSafe(sysVolt)) {
+      if (!isVoltageSafe(sysVolt) || (params.ntc1Enable && sysTemp1 > (params.otpLimit - params.otpHysteresis))) {
         stateTimer = millis();
-      } else if (millis() - stateTimer >= (params.timeDelay * 1000UL)) {
-        currentFault = FAULT_NONE;
-        runningTimer = millis();
-        orpTimer = millis();
-        currentState = STATE_RUNNING;
+      } else if (millis() - stateTimer >= (params.timeDelay_mins * 60000UL)) {
+        currentFault    = FAULT_NONE;
+        initialTempNTC2 = sysTemp2;
+        isFlowChecked   = false;
+        runningTimer    = millis();
+        orpTimer        = millis();
+        currentState    = STATE_RUNNING;
         digitalWrite(PIN_RELAY, HIGH);
       }
       break;
 
-    case STATE_RUNNING:
-      {
-        if (sysVolt > params.ovpLimit) checkFaultDelay(FAULT_OVP, params.ovpUvpDelay);
-        else if (sysVolt < params.uvpLimit) checkFaultDelay(FAULT_UVP, params.ovpUvpDelay);
-        else faultConditionTimer = millis();
+    case STATE_RUNNING: {
+      if (sysVolt > params.ovpLimit)      checkFaultDelay(FAULT_OVP, params.ovpUvpDelay);
+      else if (sysVolt < params.uvpLimit) checkFaultDelay(FAULT_UVP, params.ovpUvpDelay);
+      else                                faultConditionTimer = millis();
 
-        unsigned long runDuration = millis() - runningTimer;
-        if (runDuration <= (params.lraTime * 1000UL)) {
-          if (sysAmp >= (params.lraLimit_x100 * 0.01f)) {
-            lraRetryCount++;
-            if (lraRetryCount >= params.lraRetryLimit) {
-              currentState = STATE_LOCKOUT;
-              digitalWrite(PIN_RELAY, LOW);
-            } else {
-              triggerFault(FAULT_LRA);
-            }
+      if (params.ntc1Enable && sysTemp1 >= params.otpLimit) triggerFault(FAULT_OTP);
+
+      unsigned long runDuration = millis() - runningTimer;
+      if (runDuration <= (params.lraTime * 1000UL)) {
+        if (sysAmp_mA >= params.lraLimit_mA) {
+          lraRetryCount++;
+          if (lraRetryCount >= params.lraRetryLimit) {
+            currentState = STATE_LOCKOUT;
+            digitalWrite(PIN_RELAY, LOW);
+          } else {
+            triggerFault(FAULT_LRA);
+          }
+        }
+      } else {
+        lraRetryCount = 0;
+        if (sysAmp_mA >= params.ocpLimit_mA) {
+          checkFaultDelay(FAULT_OCP, params.ocpDelay);
+        }
+        if (params.ucpLimit_x10 > 0 && sysAmp_mA <= (params.ucpLimit_x10 * 10)) {
+          checkFaultDelay(FAULT_UCP, 60);
+        }
+      }
+
+      if (params.ntc2Enable && !isFlowChecked && runDuration >= (params.refFlowDelay_mins * 60000UL)) {
+        isFlowChecked = true;
+        if (sysTemp2 < (initialTempNTC2 + 5.0f)) { // Hardcoded delta temp of 5C
+          flowRetryCount++;
+          if (flowRetryCount >= params.flowFaultRetryLimit) {
+            currentState = STATE_LOCKOUT;
+            digitalWrite(PIN_RELAY, LOW);
+          } else {
+            triggerFault(FAULT_REF_FLOW);
           }
         } else {
-          lraRetryCount = 0;
-          if (sysAmp >= (params.ocpLimit_x100 * 0.01f)) {
-            checkFaultDelay(FAULT_OCP, params.ocpDelay);
-          }
+          flowRetryCount = 0;
         }
-
-        if (sysAmp < (params.minCurrentThreshold_x100 * 0.01f)) {
-          orpTimer = millis();
-        } else if (millis() - orpTimer >= (420UL * 60000UL)) {  // 420 min = 7 h, was P-12 (removed)
-          currentState = STATE_ORP_REST;
-          stateTimer = millis();
-          digitalWrite(PIN_RELAY, LOW);
-        }
-        break;
       }
 
-    case STATE_FAULT:
-      {
+      if (sysAmp_mA < (params.minCurrentThreshold_x10 * 10)) {
+        orpTimer = millis();
+      } else if (millis() - orpTimer >= (params.orpTimeLimit_hours * 3600000UL)) {
+        currentState = STATE_ORP_REST;
+        stateTimer   = millis();
         digitalWrite(PIN_RELAY, LOW);
-        bool readyToRecover = false;
-        if (currentFault == FAULT_OVP && sysVolt <= (params.ovpLimit - params.voltageHysteresis)) readyToRecover = true;
-        else if (currentFault == FAULT_UVP && sysVolt >= (params.uvpLimit + params.voltageHysteresis)) readyToRecover = true;
-        else if (currentFault != FAULT_OVP && currentFault != FAULT_UVP) readyToRecover = true;
-
-        if (readyToRecover) {
-          currentState = STATE_STARTUP_DELAY;
-          stateTimer = millis();
-        }
-        break;
       }
+      break;
+    }
+
+    case STATE_FAULT: {
+      digitalWrite(PIN_RELAY, LOW);
+      bool readyToRecover = false;
+      if      (currentFault == FAULT_OVP && sysVolt <= (params.ovpLimit - params.voltageHysteresis)) readyToRecover = true;
+      else if (currentFault == FAULT_UVP && sysVolt >= (params.uvpLimit + params.voltageHysteresis)) readyToRecover = true;
+      else if (currentFault == FAULT_OTP && sysTemp1 <= (params.otpLimit - params.otpHysteresis))     readyToRecover = true;
+      else if (currentFault != FAULT_OVP && currentFault != FAULT_UVP && currentFault != FAULT_OTP)   readyToRecover = true;
+
+      if (readyToRecover) {
+        currentState = STATE_STARTUP_DELAY;
+        stateTimer   = millis();
+      }
+      break;
+    }
 
     case STATE_ORP_REST:
       digitalWrite(PIN_RELAY, LOW);
-      if (millis() - stateTimer >= (30UL * 60000UL)) {  // hardcoded 30 min — P-13 removed from menu
+      if (millis() - stateTimer >= (params.orpRestDelay_mins * 60000UL)) {
         currentState = STATE_STARTUP_DELAY;
-        stateTimer = millis();
+        stateTimer   = millis();
       }
       break;
 
@@ -192,7 +213,7 @@ void loop() {
 }
 
 // ==========================================================
-// HELPERS
+// HELPERS & INDICATORS
 // ==========================================================
 void triggerFault(FaultType fault) {
   if (currentState == STATE_FAULT && currentFault == fault) return;
@@ -218,9 +239,6 @@ void restartSystem() {
   while (1) {}
 }
 
-// ==========================================================
-// LED + BUZZER (unchanged)
-// ==========================================================
 void handleIndicators() {
   static unsigned long lastLedTimer = 0;
   static uint8_t blinkCount = 0;

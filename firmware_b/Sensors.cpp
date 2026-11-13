@@ -4,7 +4,6 @@
 void initSensors() {
   pinMode(PIN_VOLTAGE_SENS, INPUT);
   pinMode(PIN_CURRENT_SENS, INPUT);
-  // NTC pins PC1/PC2 have no ADC on CH32V003 — not configured.
 }
 
 float getTrueRMS(uint8_t pin) {
@@ -39,7 +38,8 @@ float readVoltage() {
   float rmsADC = getTrueRMS(PIN_VOLTAGE_SENS);
   if (rmsADC < 5.0f) return 0.0f;
 
-  float trueVoltage = rmsADC * params.voltageMultiplier_x1000 / 1000.0f;
+  // Use _x100 instead of _x1000
+  float trueVoltage = rmsADC * params.voltageMultiplier_x100 / 100.0f;
 
   static float filteredV = 0.0f;
   if (filteredV == 0.0f) { filteredV = trueVoltage; return filteredV; }
@@ -55,7 +55,8 @@ float readVoltage() {
 
 float readCurrent() {
   float rmsADC = getTrueRMS(PIN_CURRENT_SENS);
-  float trueCurrent = rmsADC * params.currentMultiplier_x1000 / 100000.0f;
+  // Use _x100 instead of _x1000
+  float trueCurrent = rmsADC * params.currentMultiplier_x100 / 10000.0f;
 
   static float filteredA = 0.0f;
   if (trueCurrent < 0.10f) { filteredA = 0.0f; return 0.0f; }
@@ -68,3 +69,7 @@ float readCurrent() {
 
   return filteredA;
 }
+
+// Stubs (Hardware limitation: no ADC on PC1/PC2)
+float readTemp1() { return 0.0f; }
+float readTemp2() { return 0.0f; }
