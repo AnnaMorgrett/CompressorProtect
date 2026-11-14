@@ -3,14 +3,16 @@
 #include "Params.h"
 #include "Sensors.h"
 #include "UI.h"
+#include "SoftSerial.h"
 
 // Set to 0 if the flash gets too full (removes all Serial output)
 #define ENABLE_SERIAL_DEBUG 1
 
 #if ENABLE_SERIAL_DEBUG
-#define DBG_BEGIN() Serial.begin(9600)
-#define DBG_PRINT(x) Serial.print(x)
-#define DBG_PRINTLN(x) Serial.println(x)
+static SoftSerialTx DebugSerial(PIN_DEBUG_TX);
+#define DBG_BEGIN() DebugSerial.begin(9600)
+#define DBG_PRINT(x) DebugSerial.print(x)
+#define DBG_PRINTLN(x) DebugSerial.println(x)
 #else
 #define DBG_BEGIN()
 #define DBG_PRINT(x)    do {} while (0)
@@ -52,6 +54,7 @@ void checkFaultDelay(FaultType fault, uint8_t delaySeconds);
 bool isVoltageSafe(uint16_t v);
 void sendSerialTelemetry();
 void handleIndicators();
+void printAllParams();
 
 void triggerButtonChirp() { beepMs(40); }
 
@@ -105,8 +108,7 @@ void setup() {
 
   initUI();
   loadParams();
-
-  DBG_PRINTLN("[SYSTEM] Parameter Loaded from EEPROM");
+  printAllParams();
 
   if (digitalRead(PIN_CALIBRATION) == LOW) {
     currentMode = MODE_CALIBRATION;
@@ -253,12 +255,15 @@ void loop() {
       bool readyToRecover = false;
       if      (currentFault == FAULT_OVP && sysVolt <= (OVP_LIMIT - params.voltageHysteresis)) readyToRecover = true;
       else if (currentFault == FAULT_UVP && sysVolt >= (params.uvpLimit + params.voltageHysteresis)) readyToRecover = true;
+      else if (currentFault == FAULT_BLACKOUT && sysVolt >= (params.uvpLimit + params.voltageHysteresis)) readyToRecover = true;
+      else if (currentFault == FAULT_SURGE && sysVolt <= (OVP_LIMIT - params.voltageHysteresis)) readyToRecover = true;
       else if (currentFault == FAULT_OTP && sysTemp1 <= (params.otpLimit - params.otpHysteresis)) readyToRecover = true;
-      else if (currentFault != FAULT_OVP && currentFault != FAULT_UVP && currentFault != FAULT_OTP) readyToRecover = true;
+      else if (currentFault != FAULT_OVP && currentFault != FAULT_UVP && currentFault != FAULT_BLACKOUT && currentFault != FAULT_SURGE && currentFault != FAULT_OTP) readyToRecover = true;
 
       if (readyToRecover) {
         DBG_PRINTLN("[SYSTEM] Fault Recovered -> Restarting Startup Delay");
         currentState = STATE_STARTUP_DELAY;
+        currentFault = FAULT_NONE;
         stateTimer   = millis();
       }
       break;
@@ -318,30 +323,49 @@ void restartSystem() {
 #if ENABLE_SERIAL_DEBUG
 // Prints a whole number with one decimal, e.g. 217 -> "217.0" (same format as the LGT version)
 static void printOneDecimal(int16_t value) {
-  Serial.print(value);
-  Serial.print(".0");
+  DebugSerial.print(value);
+  DebugSerial.print(".0");
 }
 
 // Prints mA as Amps with two decimals, e.g. 1500 -> "1.50" (same format as the LGT version)
 static void printAmps(uint16_t mA) {
   uint16_t hundredths = (mA + 5) / 10;      // rounded to 0.01 A
-  Serial.print(hundredths / 100);
-  Serial.print(".");
-  if (hundredths % 100 < 10) Serial.print("0");
-  Serial.print(hundredths % 100);
+  DebugSerial.print(hundredths / 100);
+  DebugSerial.print(".");
+  if (hundredths % 100 < 10) DebugSerial.print("0");
+  DebugSerial.print(hundredths % 100);
 }
+#endif
+
+#if ENABLE_SERIAL_DEBUG
+void printAllParams() {
+  DebugSerial.println("\n--- EEPROM PARAMS (S-1..S-20, C-1, C-2) ---");
+  for (uint8_t i = 0; i < 20; i++) {
+    DebugSerial.print("S-");
+    DebugSerial.print(i + 1);
+    DebugSerial.print(" = ");
+    DebugSerial.println(getParamVal(i));
+  }
+  DebugSerial.print("C-1 = "); DebugSerial.println(params.voltageMultiplier_x1000);
+  DebugSerial.print("C-2 = "); DebugSerial.println(params.currentMultiplier_x1000);
+  DebugSerial.println("-------------------------------------------\n");
+}
+#else
+void printAllParams() {}
 #endif
 
 void sendSerialTelemetry() {
 #if ENABLE_SERIAL_DEBUG
-  Serial.print("MODE:");  Serial.print(currentMode);
-  Serial.print(" | ST:"); Serial.print(currentState);
-  Serial.print(" | FLT:"); Serial.print(currentFault);
-  Serial.print(" | V:");  printOneDecimal(sysVolt);
-  Serial.print(" | A:");  printAmps(sysAmp_mA);
-  Serial.print(" | T1:"); printOneDecimal(sysTemp1);
-  Serial.print(" | T2:"); printOneDecimal(sysTemp2);
-  Serial.println();
+  DebugSerial.print("TM1637:[");
+  DebugSerial.print(currentDisplayStr);
+  DebugSerial.print("] | MODE:"); DebugSerial.print(currentMode);
+  DebugSerial.print(" | ST:"); DebugSerial.print(currentState);
+  DebugSerial.print(" | FLT:"); DebugSerial.print(currentFault);
+  DebugSerial.print(" | V:");  printOneDecimal(sysVolt);
+  DebugSerial.print(" | A:");  printAmps(sysAmp_mA);
+  DebugSerial.print(" | T1:"); printOneDecimal(sysTemp1);
+  DebugSerial.print(" | T2:"); printOneDecimal(sysTemp2);
+  DebugSerial.println();
 #endif
 }
 

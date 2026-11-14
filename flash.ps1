@@ -4,8 +4,11 @@
 # Set the path to your minichlink folder
 $MinichlinkDir = "C:\Users\AVS\Documents\CompressorProtect\ch32fun-master\minichlink"
 
-# Set the path to the compiled binary (from your latest build log)
-$BinFile = "C:\Users\AVS\AppData\Local\arduino\sketches\01E11CF33B49A9F583C7CD936C4FD946\firmware_b.ino.bin"
+# Set the path to the compiled binary
+$BinFile = "C:\Users\AVS\Documents\CompressorProtect\firmware_b\build\WCH.ch32v.CH32V00x_EVT\firmware_b.ino.bin"
+if (-Not (Test-Path $BinFile)) {
+    $BinFile = "C:\Users\AVS\AppData\Local\arduino\sketches\01E11CF33B49A9F583C7CD936C4FD946\firmware_b.ino.bin"
+}
 
 # 1. Check if the compiled file exists
 if (-Not (Test-Path $BinFile)) {

@@ -19,11 +19,14 @@ extern uint16_t sysVolt;
 extern uint16_t sysAmp_mA;
 extern int16_t  sysTemp1;
 extern int16_t  sysTemp2;
+extern char     currentDisplayStr[5];
 
 void initUI();
 void updateDisplay(uint16_t currentV, uint16_t currentA_mA);
 void handleSettingMode();
 void handleCalibrationMode();
+int32_t getParamVal(uint8_t idx);
+void setParamVal(uint8_t idx, int32_t ui);
 extern void triggerButtonChirp();
 extern void restartSystem();
 

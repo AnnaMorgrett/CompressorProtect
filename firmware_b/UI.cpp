@@ -111,6 +111,28 @@ int32_t stepParamVal(uint8_t idx, int32_t value, int8_t direction) {
   return value;
 }
 
+char currentDisplayStr[5] = "----";
+
+static void setDisplay4(char c0, char c1, char c2, char c3) {
+  currentDisplayStr[0] = c0;
+  currentDisplayStr[1] = c1;
+  currentDisplayStr[2] = c2;
+  currentDisplayStr[3] = c3;
+  currentDisplayStr[4] = '\0';
+}
+
+static void setDisplayNum(int num) {
+  if (num < 0) num = 0;
+  currentDisplayStr[3] = '0' + (num % 10);
+  num /= 10;
+  currentDisplayStr[2] = (num > 0) ? ('0' + (num % 10)) : ' ';
+  num /= 10;
+  currentDisplayStr[1] = (num > 0) ? ('0' + (num % 10)) : ' ';
+  num /= 10;
+  currentDisplayStr[0] = (num > 0) ? ('0' + (num % 10)) : ' ';
+  currentDisplayStr[4] = '\0';
+}
+
 void initUI() {
   display.setBrightness(5);
   display.setSegments(MSG_SCP);
@@ -159,34 +181,44 @@ void updateDisplay(uint16_t currentV, uint16_t currentA_mA) {
           display.encodeDigit(v % 10),
           LTR_U};
       display.setSegments(dataV);
+      setDisplay4((v >= 100) ? ('0' + v / 100) : ' ', '0' + (v / 10) % 10, '0' + v % 10, 'U');
     } else {
       display.showNumberDec(currentA_mA, false, 4, 0);
+      setDisplayNum(currentA_mA);
     }
   }
   else if (currentState == STATE_FAULT) {
     uint8_t dataErr[] = {LTR_E, LTR_r, LTR_r, display.encodeDigit(currentFault)};
     display.setSegments(dataErr);
+    setDisplay4('E', 'r', 'r', '0' + currentFault);
   }
   else if (currentState == STATE_STARTUP_DELAY || currentState == STATE_ORP_REST) {
     if (remainingSec > 60) {
       if (isAltScreen && currentFault != FAULT_NONE) {
         uint8_t dataErr[] = {LTR_E, LTR_r, LTR_r, display.encodeDigit(currentFault)};
         display.setSegments(dataErr);
+        setDisplay4('E', 'r', 'r', '0' + currentFault);
       } else {
-        display.showNumberDec((remainingSec / 60) + 1, false, 4, 0);
+        int m = (remainingSec / 60) + 1;
+        display.showNumberDec(m, false, 4, 0);
+        setDisplay4(' ', 'd', (m >= 10) ? ('0' + m / 10) : ' ', '0' + m % 10);
       }
     } else {
       display.showNumberDec(remainingSec, false, 4, 0);
+      int s = remainingSec;
+      setDisplay4(' ', 's', (s >= 10) ? ('0' + s / 10) : ' ', '0' + s % 10);
     }
   }
   else if (currentState == STATE_LOCKOUT) {
     if (isAltScreen) {
       uint8_t dataErr[] = {LTR_E, LTR_r, LTR_r, display.encodeDigit(currentFault)};
       display.setSegments(dataErr);
+      setDisplay4('E', 'r', 'r', '0' + currentFault);
     } else {
       uint8_t locReason = (currentFault == FAULT_LRA) ? 1 : 2;
       uint8_t dataLoc[] = {LTR_L, LTR_O, LTR_C, display.encodeDigit(locReason)};
       display.setSegments(dataLoc);
+      setDisplay4('L', 'O', 'C', '0' + locReason);
     }
   }
 }
