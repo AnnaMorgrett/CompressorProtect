@@ -3,7 +3,7 @@
 SystemParams params;
 
 const int  EEPROM_MAGIC_ADDR = 0;
-const byte EEPROM_MAGIC_VAL  = 0xA8; // changed: new struct layout -> old data is discarded
+const byte EEPROM_MAGIC_VAL  = 0xA8; // changed: new struct layout -> old data is discarded[cite: 7]
 const int  EEPROM_DATA_ADDR  = 1;
 
 void resetToDefaultParams() {
@@ -12,7 +12,7 @@ void resetToDefaultParams() {
   params.orpTimeLimit_hours        = 7;
   params.voltageMultiplier_x1000   = 3420;
   params.currentMultiplier_x1000   = 1880;
-  params.ovpLimit_div2             = 125;   // 250 V
+  params.ovpLimit_div2             = 125;   // 250 V[cite: 7]
   params.uvpLimit                  = 180;
   params.ovpUvpDelay               = 5;
   params.voltageHysteresis         = 10;
@@ -27,12 +27,11 @@ void resetToDefaultParams() {
   params.otpHysteresis             = 10;
   params.flowFaultRetryLimit       = 5;
   params.orpRestDelay_mins         = 30;
-
   saveParams();
 }
 
 void loadParams() {
-  EEPROM.begin();   // REQUIRED on the CH32 EEPROM library, otherwise nothing is read or saved
+  EEPROM.begin();   // REQUIRED on the CH32 EEPROM library, otherwise nothing is read or saved[cite: 7]
   if (EEPROM.read(EEPROM_MAGIC_ADDR) == EEPROM_MAGIC_VAL) {
     EEPROM.get(EEPROM_DATA_ADDR, params);
   } else {
