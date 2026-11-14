@@ -13,9 +13,12 @@ extern SystemState   currentState;
 extern FaultType     currentFault;
 extern unsigned long stateTimer;
 extern uint8_t       lraRetryCount;
+extern uint8_t       flowRetryCount;
 
 extern uint16_t sysVolt;
 extern uint16_t sysAmp_mA;
+extern int16_t  sysTemp1;
+extern int16_t  sysTemp2;
 
 void initUI();
 void updateDisplay(uint16_t currentV, uint16_t currentA_mA);

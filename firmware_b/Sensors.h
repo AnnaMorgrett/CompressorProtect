@@ -6,7 +6,9 @@
 #include "Params.h"
 
 void initSensors();
-uint16_t readVoltage();
-uint16_t readCurrent();
+uint16_t readVoltage();   // Volts
+uint16_t readCurrent();   // mA
+int16_t  readTemp1();     // deg C, NTC1 compressor (not available yet -> 0)
+int16_t  readTemp2();     // deg C, NTC2 dryer      (not available yet -> 0)
 
 #endif
