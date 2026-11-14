@@ -111,18 +111,20 @@ void setup() {
   if (digitalRead(PIN_CALIBRATION) == LOW) {
     currentMode = MODE_CALIBRATION;
     digitalWrite(PIN_RELAY, HIGH);   // relay ON so V / A can be calibrated live
-    DBG_PRINTLN(">>> MODE: CALIBRATION (RELAY ON) <<<");
+    DBG_PRINTLN(">>> MODE: KALIBRASI AKTIF (RELAY ON) <<<");
+    DBG_PRINTLN(">>> MATIKAN POWER & COPOT JUMPER UNTUK KELUAR <<<");
   } else {
     int buttonAdc = analogRead(PIN_BUTTONS);
     if (buttonAdc >= 240 && buttonAdc <= 420) {   // Menu button held at boot
       currentMode = MODE_SETTING;
       digitalWrite(PIN_RELAY, LOW);
-      DBG_PRINTLN(">>> MODE: SETTING <<<");
+      DBG_PRINTLN(">>> MODE: SETTING PARAMETER AKTIF <<<");
+      DBG_PRINTLN(">>> TAHAN TOMBOL MENU UNTUK SAVE & RESTART <<<");
     } else {
       currentMode = MODE_NORMAL_PROTECTION;
       digitalWrite(PIN_RELAY, LOW);
       stateTimer = millis();
-      DBG_PRINTLN(">>> MODE: PROTECTION <<<");
+      DBG_PRINTLN(">>> MODE: PROTEKSI SISTEM UTAMA AKTIF <<<");
     }
   }
 
@@ -193,13 +195,13 @@ void loop() {
       if (runDuration <= (params.lraTime * 1000UL)) {
         if (sysAmp_mA >= params.lraLimit_mA) {
           lraRetryCount++;
-          DBG_PRINT("[WARNING] LRA trip, retry: ");
+          DBG_PRINT("[WARNING] LRA Trip Detected! Retry: ");
           DBG_PRINTLN(lraRetryCount);
           if (lraRetryCount >= params.lraRetryLimit) {
             currentFault = FAULT_LRA;          // so the display shows Err5 + LOC1
             currentState = STATE_LOCKOUT;
             digitalWrite(PIN_RELAY, LOW);
-            DBG_PRINTLN("[FATAL] LRA retry exceeded -> LOCKOUT");
+            DBG_PRINTLN("[FATAL] LRA Retry Exceeded -> SYSTEM LOCKEDOUT!");
           } else {
             triggerFault(FAULT_LRA);
           }
@@ -219,13 +221,13 @@ void loop() {
         isFlowChecked = true;
         if (sysTemp2 < (initialTempNTC2 + 5)) {      // minimum rise of 5 C, same as LGT default
           flowRetryCount++;
-          DBG_PRINT("[WARNING] Ref flow error, retry: ");
+          DBG_PRINT("[WARNING] Ref Flow Error! Retry: ");
           DBG_PRINTLN(flowRetryCount);
           if (flowRetryCount >= params.flowFaultRetryLimit) {
             currentFault = FAULT_REF_FLOW;     // Err9 + LOC2
             currentState = STATE_LOCKOUT;
             digitalWrite(PIN_RELAY, LOW);
-            DBG_PRINTLN("[FATAL] Ref flow retry exceeded -> LOCKOUT");
+            DBG_PRINTLN("[FATAL] Ref Flow Retry Exceeded -> SYSTEM LOCKEDOUT!");
           } else {
             triggerFault(FAULT_REF_FLOW);
           }
@@ -241,7 +243,7 @@ void loop() {
         currentState = STATE_ORP_REST;
         stateTimer   = millis();
         digitalWrite(PIN_RELAY, LOW);
-        DBG_PRINTLN("[SYSTEM] ORP triggered -> rest");
+        DBG_PRINTLN("[SYSTEM] ORP Triggered -> Entering Rest State");
       }
       break;
     }
@@ -255,7 +257,7 @@ void loop() {
       else if (currentFault != FAULT_OVP && currentFault != FAULT_UVP && currentFault != FAULT_OTP) readyToRecover = true;
 
       if (readyToRecover) {
-        DBG_PRINTLN("[SYSTEM] Fault recovered -> startup delay");
+        DBG_PRINTLN("[SYSTEM] Fault Recovered -> Restarting Startup Delay");
         currentState = STATE_STARTUP_DELAY;
         stateTimer   = millis();
       }
@@ -266,7 +268,7 @@ void loop() {
       digitalWrite(PIN_RELAY, LOW);
       bool tempCool = (!NTC1_ENABLED || sysTemp1 <= 60);
       if ((millis() - stateTimer >= (params.orpRestDelay_mins * 60000UL)) && tempCool) {
-        DBG_PRINTLN("[SYSTEM] ORP rest done -> startup delay");
+        DBG_PRINTLN("[SYSTEM] ORP Rest Completed -> Restarting Startup Delay");
         currentState = STATE_STARTUP_DELAY;
         stateTimer   = millis();
       }
@@ -292,7 +294,7 @@ void triggerFault(FaultType fault) {
   currentState = STATE_FAULT;
   digitalWrite(PIN_RELAY, LOW);
   faultConditionTimer = millis();
-  DBG_PRINT("[TRIP FAULT] Code: ");
+  DBG_PRINT("\n[TRIP FAULT] Code: ");
   DBG_PRINTLN((int)fault);
 }
 
@@ -305,6 +307,7 @@ bool isVoltageSafe(uint16_t v) {
 }
 
 void restartSystem() {
+  DBG_PRINTLN("[SYSTEM] Rebooting...");
   delay(100);
   IWDG_WriteAccessCmd(IWDG_WriteAccess_Enable);
   IWDG_SetReload(0);
@@ -312,15 +315,33 @@ void restartSystem() {
   while (1) {}
 }
 
+#if ENABLE_SERIAL_DEBUG
+// Prints a whole number with one decimal, e.g. 217 -> "217.0" (same format as the LGT version)
+static void printOneDecimal(int16_t value) {
+  Serial.print(value);
+  Serial.print(".0");
+}
+
+// Prints mA as Amps with two decimals, e.g. 1500 -> "1.50" (same format as the LGT version)
+static void printAmps(uint16_t mA) {
+  uint16_t hundredths = (mA + 5) / 10;      // rounded to 0.01 A
+  Serial.print(hundredths / 100);
+  Serial.print(".");
+  if (hundredths % 100 < 10) Serial.print("0");
+  Serial.print(hundredths % 100);
+}
+#endif
+
 void sendSerialTelemetry() {
 #if ENABLE_SERIAL_DEBUG
   Serial.print("MODE:");  Serial.print(currentMode);
   Serial.print(" | ST:"); Serial.print(currentState);
   Serial.print(" | FLT:"); Serial.print(currentFault);
-  Serial.print(" | V:");  Serial.print(sysVolt);
-  Serial.print(" | mA:"); Serial.print(sysAmp_mA);
-  Serial.print(" | T1:"); Serial.print(sysTemp1);
-  Serial.print(" | T2:"); Serial.println(sysTemp2);
+  Serial.print(" | V:");  printOneDecimal(sysVolt);
+  Serial.print(" | A:");  printAmps(sysAmp_mA);
+  Serial.print(" | T1:"); printOneDecimal(sysTemp1);
+  Serial.print(" | T2:"); printOneDecimal(sysTemp2);
+  Serial.println();
 #endif
 }
 

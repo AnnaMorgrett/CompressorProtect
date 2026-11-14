@@ -25,8 +25,8 @@
 #define PIN_TEMP_COMP      PC2   // Pin 2  (SOP-16) - NTC1 (Compressor shell) - no ADC
 
 // --- Header H1 / Calibration / UART ---
-#define PIN_DEBUG_TX       PC6   // Pin 5  (SOP-16) - TX for Serial Monitor (Software UART)
-#define PIN_CALIBRATION    PC7   // Pin 6  (SOP-16) - Calibration jumper (INPUT_PULLUP, Active LOW)
+#define PIN_DEBUG_TX       PC7   // Pin 6  (SOP-16) - TX on header H1 pin 2 (schematic V1.0)
+#define PIN_CALIBRATION    PC6   // Pin 5  (SOP-16) - CAL on header H1 pin 3, INPUT_PULLUP, Active LOW (schematic V1.0)
 #define PIN_SWIO_DEBUG     PD1   // Pin 7  (SOP-16) - SWIO single-wire debug / flashing (PROG)
 
 // --- Buzzer type ---
