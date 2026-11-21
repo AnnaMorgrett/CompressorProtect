@@ -66,7 +66,9 @@ static void beep_ms(uint16_t ms) {
 }
 
 void system_button_chirp(void) {
+#if BUTTON_CHIRP
     beep_ms(40);
+#endif
 }
 
 void system_reboot(void) {

@@ -95,14 +95,31 @@ void tm1637_show_segments(const uint8_t segments[4]) {
 }
 
 void tm1637_show_number(int num) {
-    if (num < 0) num = 0;
     uint8_t segs[4];
+    bool neg = false;
+    if (num < 0) {
+        neg = true;
+        num = -num;
+    }
+
     segs[3] = DIGIT_SEG[num % 10];
     num /= 10;
-    segs[2] = (num > 0) ? DIGIT_SEG[num % 10] : BLANK;
-    num /= 10;
-    segs[1] = (num > 0) ? DIGIT_SEG[num % 10] : BLANK;
-    num /= 10;
-    segs[0] = (num > 0) ? DIGIT_SEG[num % 10] : BLANK;
+
+    if (num > 0) {
+        segs[2] = DIGIT_SEG[num % 10];
+        num /= 10;
+        if (num > 0) {
+            segs[1] = DIGIT_SEG[num % 10];
+            num /= 10;
+            segs[0] = neg ? SEG_G : ((num > 0) ? DIGIT_SEG[num % 10] : BLANK);
+        } else {
+            segs[1] = neg ? SEG_G : BLANK;
+            segs[0] = BLANK;
+        }
+    } else {
+        segs[2] = neg ? SEG_G : BLANK;
+        segs[1] = BLANK;
+        segs[0] = BLANK;
+    }
     tm1637_show_segments(segs);
 }

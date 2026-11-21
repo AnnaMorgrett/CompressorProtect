@@ -38,5 +38,6 @@
 #define ENABLE_SERIAL_DEBUG 1
 #define BUZZER_PASSIVE      0
 #define BUZZER_FREQ_HZ      2700
+#define BUTTON_CHIRP        0   // 0 = Silent buttons (matches Batch 1 / original LGT8F328P UX)
 
 #endif
