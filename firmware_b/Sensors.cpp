@@ -54,10 +54,9 @@ uint16_t getTrueRMS(uint8_t pin) {
 
 uint16_t readVoltage() {
   uint16_t rmsADC = getTrueRMS(PIN_VOLTAGE_SENS);
-  uint16_t trueVoltage = ((uint32_t)rmsADC * params.voltageMultiplier_x1000) / 1000;
-  if (trueVoltage < 5) return 0;
-
+  uint16_t trueVoltage = ((uint32_t)rmsADC * params.voltageMultiplier_x1000) / VOLT_CAL_DIV;
   static uint16_t filteredV = 0;
+  if (trueVoltage < 30) { filteredV = 0; return 0; }   // noise floor: nothing connected
   if (filteredV == 0) { filteredV = trueVoltage; return filteredV; }
 
   int16_t diff = (int16_t)trueVoltage - (int16_t)filteredV;
@@ -66,7 +65,6 @@ uint16_t readVoltage() {
   if (diff > 3) filteredV = trueVoltage;
   else          filteredV = (filteredV * 85 + trueVoltage * 15) / 100;
 
-  if (filteredV < 30) filteredV = 0;
   return filteredV;
 }
 

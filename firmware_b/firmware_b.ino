@@ -70,7 +70,11 @@ void sendSerialTelemetry();
 void handleIndicators();
 void pollSerialCli();
 
-void triggerButtonChirp() { beepMs(40); }
+void triggerButtonChirp() {
+#if BUTTON_CHIRP
+  beepMs(40);
+#endif
+}
 
 void beepMs(uint16_t ms) {
 #if BUZZER_PASSIVE
@@ -165,7 +169,27 @@ void loop() {
   }
 
   bool rxInterrupted = false;
-  if (currentMode != MODE_SETTING) {
+  if (currentMode == MODE_CALIBRATION) {
+    // Read ONE sensor every 120 ms (alternating) so the loop stays fast and key presses are not missed
+    static unsigned long calReadTimer = 0;
+    static bool calReadVoltage = true;
+    if (millis() - calReadTimer >= 120) {
+      calReadTimer = millis();
+      if (calReadVoltage) sysVolt   = readVoltage();
+      else                sysAmp_mA = readCurrent();
+      calReadVoltage = !calReadVoltage;
+      if (serialRxIncoming()) {
+        rxInterrupted = true;
+        pollSerialCli();
+      }
+    }
+#if NTC1_ENABLED
+    sysTemp1 = readTemp1();
+#endif
+#if NTC2_ENABLED
+    sysTemp2 = readTemp2();
+#endif
+  } else if (currentMode != MODE_SETTING) {
     sysVolt = readVoltage();
     if (serialRxIncoming()) {
       rxInterrupted = true;
@@ -413,11 +437,7 @@ static void printSerialHelp() {
   DBG_PRINTLN("reboot      Restart controller");
   DBG_PRINTLN("\nExamples:");
   DBG_PRINTLN("  $1=5      -> Startup delay = 5 min");
-  DBG_PRINTLN("  $2=250    -> OVP limit = 250 V");
-  DBG_PRINTLN("  $6=1500   -> LRA limit = 1500 mA");
-  DBG_PRINTLN("  $11=0     -> UCP Off");
-  DBG_PRINTLN("  $C1=3420  -> Voltage cal ($21)");
-  DBG_PRINTLN("  $C2=1880  -> Current cal ($22)");
+  DBG_PRINTLN("  $C1=4850  -> Voltage cal ($21)");
   DBG_PRINTLN("-----------------------\n");
 }
 
@@ -471,7 +491,7 @@ static void handleGrblAssign(const char *cmd) {
   }
 
   if (id == 21 || id == 22) {
-    if (val < 1 || val > 5000) { DBG_PRINTLN("[ERR] Range: 1..5000"); return; }
+    if (val < 1 || val > 9999) { DBG_PRINTLN("[ERR] Range: 1..9999"); return; }
     if (id == 21) params.voltageMultiplier_x1000 = (uint16_t)val;
     else          params.currentMultiplier_x1000 = (uint16_t)val;
     saveParams();

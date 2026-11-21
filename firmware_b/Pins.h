@@ -36,4 +36,8 @@
 #define BUZZER_PASSIVE     0
 #define BUZZER_FREQ_HZ     2700
 
+// --- Button chirp ---
+// 1 = short beep on every key press, 0 = silent keys
+#define BUTTON_CHIRP       0
+
 #endif
