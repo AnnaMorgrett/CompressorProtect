@@ -316,7 +316,9 @@ static ButtonEvents readButtons(uint8_t &lastBtn, unsigned long &btnPressTime, b
     if (e.rawBtn != 0) {
       btnPressTime = millis();
       isLongPressHandled = false;
+#if BUTTON_CHIRP
       triggerButtonChirp();
+#endif
     } else if (!isLongPressHandled && (millis() - btnPressTime > BTN_MIN_TAP_MS)) {
       e.clickEvent = lastBtn;
     }
@@ -450,7 +452,7 @@ void handleCalibrationMode() {
     if (currentMenu == 4 || currentMenu == 5) {
       if (btn.clickEvent == 1) editValue += 1;
       if (btn.clickEvent == 3) editValue -= 1;
-      if (editValue > 5000) editValue = 5000;
+      if (editValue > 9999) editValue = 9999;
       if (editValue < 1)    editValue = 1;
     }
     if (btn.clickEvent == 2 || btn.longPressEvent) {

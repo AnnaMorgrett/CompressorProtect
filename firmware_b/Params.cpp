@@ -3,14 +3,14 @@
 SystemParams params;
 
 const int  EEPROM_MAGIC_ADDR = 0;
-const byte EEPROM_MAGIC_VAL  = 0xA8; // changed: new struct layout -> old data is discarded[cite: 7]
+const byte EEPROM_MAGIC_VAL  = 0xA9; // changed: C-1 scale changed -> old data is discarded
 const int  EEPROM_DATA_ADDR  = 1;
 
 void resetToDefaultParams() {
   params.timeDelay_mins            = 5;
   params.refFlowDelay_mins         = 5;
   params.orpTimeLimit_hours        = 7;
-  params.voltageMultiplier_x1000   = 3420;
+  params.voltageMultiplier_x1000   = VOLT_CAL_DEFAULT;
   params.currentMultiplier_x1000   = 1880;
   params.ovpLimit_div2             = 125;   // 250 V[cite: 7]
   params.uvpLimit                  = 180;

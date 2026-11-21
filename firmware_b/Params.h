@@ -15,10 +15,14 @@
 
 // CH32V003 EEPROM = 26 bytes. Magic (1) + struct (24) = 25 bytes used.[cite: 7]
 // The four uint16_t fields come FIRST so every uint16_t sits on an even address.[cite: 7]
+// Voltage calibration scale: V = rmsADC * C-1 / VOLT_CAL_DIV  (C-1 range 1..9999)
+#define VOLT_CAL_DIV      160UL
+#define VOLT_CAL_DEFAULT  4850
+
 struct SystemParams {
   uint16_t lraLimit_mA;              // 800 - 5000[cite: 7]
   uint16_t ocpLimit_mA;              // 300 - 4500[cite: 7]
-  uint16_t voltageMultiplier_x1000;  // 3420 = 3.420  (calibration C-1)[cite: 7]
+  uint16_t voltageMultiplier_x1000;  // C-1: volts per ADC count = value / VOLT_CAL_DIV (4850 / 160 = 30.3 V)
   uint16_t currentMultiplier_x1000;  // 1880 = 1.880  (calibration C-2)[cite: 7]
 
   uint8_t  ovpLimit_div2;            // OVP volts / 2 (125 = 250 V). Use OVP_LIMIT below[cite: 7]
