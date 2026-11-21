@@ -70,7 +70,11 @@ void sendSerialTelemetry();
 void handleIndicators();
 void pollSerialCli();
 
-void triggerButtonChirp() { beepMs(40); }
+void triggerButtonChirp() {
+#if BUTTON_CHIRP
+  beepMs(40);
+#endif
+}
 
 void beepMs(uint16_t ms) {
 #if BUZZER_PASSIVE
