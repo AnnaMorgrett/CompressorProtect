@@ -1,0 +1,9 @@
+#ifndef FUNCONFIG_H
+#define FUNCONFIG_H
+
+#define FUNCONF_USE_PLL           1
+#define FUNCONF_SYSTEM_CORE_CLOCK 48000000
+#define FUNCONF_USE_DEBUGPRINTF   0
+#define FUNCONF_USE_UARTPRINTF    0
+
+#endif
