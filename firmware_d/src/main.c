@@ -313,7 +313,7 @@ int main(void) {
             if (!is_voltage_safe(sys_volt_dv)) {
                 state_timer = millis(); // Hold delay if voltage unsafe
             } else if (millis() - state_timer >= (params.time_delay_mins * 60000UL)) {
-                current_fault     = FAULT_NONE;
+                current_fault     = FAULT_NONE; // Reset fault code when compressor starts
                 initial_temp_ntc2 = sys_temp2;
                 is_flow_checked   = false;
                 running_timer     = millis();
@@ -357,7 +357,10 @@ int main(void) {
                     fault_condition_timer = millis();
                 }
             } else {
-                // Post-inrush: OCP & UCP
+                // Post-inrush: successful start resets LRA retry count
+                lra_retry_count = 0;
+
+                // OCP & UCP monitoring
                 if (sys_amp_ma >= params.ocp_limit_ma) {
                     check_fault_delay(FAULT_OCP, params.ocp_delay);
                 } else {
@@ -403,7 +406,7 @@ int main(void) {
 
             if (ready_to_recover) {
                 current_state = STATE_STARTUP_DELAY;
-                current_fault = FAULT_NONE;
+                // Note: current_fault is preserved so TM1637 flip-flops Err code during delay countdown
                 state_timer   = millis();
                 serial_cli_log_str("[SYSTEM] Fault Recovered -> Restarting Startup Delay");
             }

@@ -47,12 +47,12 @@ void sensors_init(void) {
     funPinMode(PIN_CURRENT_SENS, GPIO_CNF_IN_ANALOG);
     funPinMode(PIN_BUTTONS,      GPIO_CNF_IN_ANALOG);
 
-    // ADC setup: Prescaler /8 (48MHz / 8 = 6MHz), independent continuous/single
+    // ADC setup: Prescaler /8 (48MHz / 8 = 6MHz)
     RCC->CFGR0 &= ~RCC_ADCPRE;
     RCC->CFGR0 |= RCC_ADCPRE_DIV8;
 
     ADC1->CTLR1 = 0;
-    ADC1->CTLR2 = ADC_ADON | ADC_EXTSEL; // External trigger mode = SWSTART
+    ADC1->CTLR2 = ADC_ADON | ADC_EXTSEL;
     Delay_Ms(2);
 
     // Calibrate ADC
@@ -61,7 +61,7 @@ void sensors_init(void) {
     ADC1->CTLR2 |= ADC_CAL;
     while (ADC1->CTLR2 & ADC_CAL);
 
-    // Sampling time: 71.5 cycles for clean stability
+    // Sampling time: 71.5 cycles
     ADC1->SAMPTR2 = (7 << 0) | (7 << 3) | (7 << 18);
 }
 
@@ -105,7 +105,9 @@ uint16_t sensors_read_voltage_dv(void) {
     if (rms_q8 < (5U << 8)) return 0;
 
     // Calibrated voltage: decivolts (0.1 V)
-    uint32_t raw_dv = (rms_q8 * (uint32_t)params.voltage_multiplier_x1000) >> 12;
+    // 10-bit to 12-bit normalized: rms_10bit * 4 * (C-1 / 1000) * 10
+    // In Q8: (rms_q8 * params.voltage_multiplier_x1000) / 6400
+    uint32_t raw_dv = ((uint64_t)rms_q8 * params.voltage_multiplier_x1000) / 6400;
 
     static uint16_t filtered_dv = 0;
     if (filtered_dv == 0) {
@@ -132,8 +134,10 @@ uint16_t sensors_read_voltage_dv(void) {
 uint16_t sensors_read_current_ma(void) {
     uint32_t rms_q8 = get_true_rms_q8(PIN_CURRENT_SENS);
 
-    // Scale to milliamps
-    uint32_t raw_ma = (rms_q8 * (uint32_t)params.current_multiplier_x1000) >> 11;
+    // Scale to milliamps:
+    // 10-bit to 12-bit normalized: rms_10bit * 4 * (C-2 / 100,000) * 1,000,000
+    // In Q8: (rms_q8 * params.current_multiplier_x1000 * 5) / 32
+    uint32_t raw_ma = ((uint64_t)rms_q8 * params.current_multiplier_x1000 * 5) / 32;
 
     // Hard noise gate (< 100 mA) -> instant 0 mA
     if (raw_ma < 100) return 0;
@@ -161,7 +165,6 @@ uint16_t sensors_read_current_ma(void) {
 
 int16_t sensors_read_temp1(void) {
 #if NTC1_ENABLED
-    // Placeholder if hardware expanded with external ADC mux
     return 25 + params.temp_offset;
 #else
     return 0;

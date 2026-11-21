@@ -3,7 +3,7 @@
 system_params_t params;
 
 #define EEPROM_MAGIC_ADDR 0
-#define EEPROM_MAGIC_VAL  0xAA
+#define EEPROM_MAGIC_VAL  0xAC
 #define EEPROM_DATA_ADDR  1
 #define EEPROM_CRC_ADDR   (EEPROM_DATA_ADDR + sizeof(system_params_t))
 
@@ -34,10 +34,10 @@ void params_reset_defaults(void) {
     params.display_mode              = 5;
     params.ref_flow_delay_mins       = 5;
     params.orp_time_limit_hours      = 7;
-    params.voltage_multiplier_x1000  = 3420; // 0.855 scale
-    params.current_multiplier_x1000  = 1880; // 0.470 scale
-    params.temp_offset               = 0;
-    params.ovp_limit_div2            = 125;  // 250 V
+    params.voltage_multiplier_x1000  = 855; // C-1: Default 855 (0.855 scale) from Panduan Pengguna
+    params.current_multiplier_x1000  = 470; // C-2: Default 470 (0.470 scale) from Panduan Pengguna
+    params.temp_offset               = 0;   // C-3: Default 0
+    params.ovp_limit_div2            = 125; // 250 V
     params.uvp_limit                 = 180;
     params.ovp_uvp_delay             = 5;
     params.voltage_hysteresis        = 10;
@@ -47,7 +47,7 @@ void params_reset_defaults(void) {
     params.ocp_limit_ma              = 800;
     params.ocp_delay                 = 4;
     params.ucp_limit_x10             = 0;
-    params.min_current_threshold_x10 = 25;   // 250 mA
+    params.min_current_threshold_x10 = 25;  // 250 mA
     params.otp_limit                 = 85;
     params.otp_hysteresis            = 10;
     params.flow_fault_retry_limit    = 5;
@@ -56,8 +56,8 @@ void params_reset_defaults(void) {
 }
 
 void params_reset_calibration(void) {
-    params.voltage_multiplier_x1000 = 3420;
-    params.current_multiplier_x1000 = 1880;
+    params.voltage_multiplier_x1000 = 855;
+    params.current_multiplier_x1000 = 470;
     params.temp_offset = 0;
     params_save();
 }

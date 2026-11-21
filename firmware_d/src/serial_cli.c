@@ -24,7 +24,7 @@ static const char *const PARAM_NAMES[20] = {
     "OCP(mA)[300..4500]",
     "OCP-D(s)[2..10]",
     "UCP(mA)[0,200..1000]",
-    "Min-A(mA)[0,150..300]",
+    "Min-A(mA)[0,150..400]",
     "NTC1[0=lock]",
     "OTP(C)[70..90]",
     "OTP-H(C)[5..20]",
@@ -95,8 +95,8 @@ static void print_help(void) {
     soft_serial_println_str("  $2=250    -> OVP limit = 250 V");
     soft_serial_println_str("  $6=1500   -> LRA limit = 1500 mA");
     soft_serial_println_str("  $11=0     -> UCP Off");
-    soft_serial_println_str("  $C1=3420  -> Voltage cal ($21)");
-    soft_serial_println_str("  $C2=1880  -> Current cal ($22)");
+    soft_serial_println_str("  $C1=855   -> Voltage cal ($21)");
+    soft_serial_println_str("  $C2=470   -> Current cal ($22)");
     soft_serial_println_str("-----------------------\n");
 }
 
@@ -113,11 +113,11 @@ static void print_settings(void) {
     }
     soft_serial_print_str("$21=");
     soft_serial_print_int(params.voltage_multiplier_x1000);
-    soft_serial_println_str(" (Cal-C1:V-Mult*1000)");
+    soft_serial_println_str(" (Cal-C1:V-Mult)");
 
     soft_serial_print_str("$22=");
     soft_serial_print_int(params.current_multiplier_x1000);
-    soft_serial_println_str(" (Cal-C2:A-Mult*1000)");
+    soft_serial_println_str(" (Cal-C2:A-Mult)");
     soft_serial_println_str("--------------------------\n");
 }
 

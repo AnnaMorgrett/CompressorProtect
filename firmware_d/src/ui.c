@@ -40,7 +40,7 @@ static const param_meta_t PARAM_META[20] = {
     {300,  4500, 50,  false}, // 8: S-09 OCP Limit (mA)
     {2,    10,   1,   false}, // 9: S-10 OCP Delay (s)
     {200,  1000, 50,  true }, // 10: S-11 UCP Limit (mA, 0=OFF)
-    {150,  300,  50,  true }, // 11: S-12 Min Current (mA, 0=OFF)
+    {150,  400,  50,  true }, // 11: S-12 Min Current (mA, 0=OFF)
     {0,    0,    1,   false}, // 12: S-13 NTC1 Lock (0)
     {70,   90,   1,   false}, // 13: S-14 OTP Limit (C)
     {5,    20,   1,   false}, // 14: S-15 OTP Hysteresis (C)
