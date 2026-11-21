@@ -283,6 +283,9 @@ void updateDisplay(uint16_t currentV, uint16_t currentA_mA) {
   }
 }
 
+#define BTN_DEBOUNCE_MS  15   // reading must be stable this long
+#define BTN_MIN_TAP_MS   20   // shortest tap accepted as a click
+
 struct ButtonEvents {
   uint8_t rawBtn;
   uint8_t clickEvent;
@@ -292,16 +295,29 @@ struct ButtonEvents {
 static ButtonEvents readButtons(uint8_t &lastBtn, unsigned long &btnPressTime, bool &isLongPressHandled) {
   ButtonEvents e = {0, 0, false};
   int adc = analogRead(PIN_BUTTONS);
-  if (adc < 240)                        e.rawBtn = 1;
-  else if (adc >= 240 && adc <= 420)    e.rawBtn = 2;
-  else if (adc >= 420 && adc <= 650)    e.rawBtn = 3;
+  uint8_t reading = 0;
+  if (adc < 240)                        reading = 1;
+  else if (adc >= 240 && adc <= 420)    reading = 2;
+  else if (adc >= 420 && adc <= 650)    reading = 3;
+
+  // Debounce: a reading is accepted only after it stays the same for BTN_DEBOUNCE_MS
+  static uint8_t candidate = 0;
+  static uint8_t stableBtn = 0;
+  static unsigned long candidateSince = 0;
+  if (reading != candidate) {
+    candidate = reading;
+    candidateSince = millis();
+  } else if (candidate != stableBtn && (millis() - candidateSince >= BTN_DEBOUNCE_MS)) {
+    stableBtn = candidate;
+  }
+  e.rawBtn = stableBtn;
 
   if (e.rawBtn != lastBtn) {
     if (e.rawBtn != 0) {
       btnPressTime = millis();
       isLongPressHandled = false;
       triggerButtonChirp();
-    } else if (!isLongPressHandled && (millis() - btnPressTime > 50)) {
+    } else if (!isLongPressHandled && (millis() - btnPressTime > BTN_MIN_TAP_MS)) {
       e.clickEvent = lastBtn;
     }
     lastBtn = e.rawBtn;

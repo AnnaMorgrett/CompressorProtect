@@ -169,7 +169,27 @@ void loop() {
   }
 
   bool rxInterrupted = false;
-  if (currentMode != MODE_SETTING) {
+  if (currentMode == MODE_CALIBRATION) {
+    // Read ONE sensor every 120 ms (alternating) so the loop stays fast and key presses are not missed
+    static unsigned long calReadTimer = 0;
+    static bool calReadVoltage = true;
+    if (millis() - calReadTimer >= 120) {
+      calReadTimer = millis();
+      if (calReadVoltage) sysVolt   = readVoltage();
+      else                sysAmp_mA = readCurrent();
+      calReadVoltage = !calReadVoltage;
+      if (serialRxIncoming()) {
+        rxInterrupted = true;
+        pollSerialCli();
+      }
+    }
+#if NTC1_ENABLED
+    sysTemp1 = readTemp1();
+#endif
+#if NTC2_ENABLED
+    sysTemp2 = readTemp2();
+#endif
+  } else if (currentMode != MODE_SETTING) {
     sysVolt = readVoltage();
     if (serialRxIncoming()) {
       rxInterrupted = true;
