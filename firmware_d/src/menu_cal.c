@@ -1,32 +1,35 @@
-/* [#09] menu_cal.c - Mode 2 (Sett: P01..P09, SAVE, rSt) and Mode 3 (CAL: C-0, C-V, C-A, SAVE). */
+/* [#09] menu_cal.c - Mode 2 Settings Menu ("Sett") and Mode 3 Sensor Calibration ("C-0", "C-V", "C-A").
+ * Both modes keep the compressor relay OFF (except when user explicitly enables load in C-A)
+ * and end in "donE" halt state requiring a clean power cycle. */
 #include "system.h"
 
 #define CAL_ZERO_MAX_Q6 300U   /* ~4.7 ADC RMS counts: reject C-0 if live 220V AC is still plugged in */
 
 typedef enum { FMT_UINT, FMT_MINUTES, FMT_AMPS } ParamFmt_t;
 typedef struct {
-    const char *code;
-    uint16_t   *value;
-    uint16_t    min, max, step;
-    ParamFmt_t  fmt;
+    const char *code;          /* 3-char parameter code shown in Level 1 ("P01".."P09") */
+    uint16_t   *value;         /* Pointer to live field in g_cfg */
+    uint16_t    min, max, step;/* Allowed range and +/- step increment */
+    ParamFmt_t  fmt;           /* Display formatter for Level 2 editing */
 } Param_t;
 
 static const Param_t k_params[] = {
-    { "P01", &g_cfg.ov_v,      230U, 270U,  1U, FMT_UINT    },
-    { "P02", &g_cfg.uv_v,      140U, 210U,  1U, FMT_UINT    },
-    { "P03", &g_cfg.hys_v,       2U,  20U,  1U, FMT_UINT    },
-    { "P04", &g_cfg.oc_ca,      50U, 999U,  5U, FMT_AMPS    },
-    { "P05", &g_cfg.inr_x10,    15U,  50U,  1U, FMT_UINT    },
-    { "P06", &g_cfg.tin_ds,      5U,  50U,  1U, FMT_UINT    },
-    { "P07", &g_cfg.toc_ds,      1U,  50U,  1U, FMT_UINT    },
-    { "P08", &g_cfg.delay_min,   1U,  10U,  1U, FMT_MINUTES },
-    { "P09", &g_cfg.ret_cnt,     1U,   5U,  1U, FMT_UINT    },
+    { "P01", &g_cfg.ov_v,      230U, 270U,  1U, FMT_UINT    }, /* Over-voltage trip (V) */
+    { "P02", &g_cfg.uv_v,      140U, 210U,  1U, FMT_UINT    }, /* Under-voltage trip (V) */
+    { "P03", &g_cfg.hys_v,       2U,  20U,  1U, FMT_UINT    }, /* Voltage hysteresis (V) */
+    { "P04", &g_cfg.oc_ca,      50U, 999U,  5U, FMT_AMPS    }, /* Over-current trip (0.01 A) */
+    { "P05", &g_cfg.inr_x10,    15U,  50U,  1U, FMT_UINT    }, /* Inrush multiplier (0.1x) */
+    { "P06", &g_cfg.tin_ds,      5U,  50U,  1U, FMT_UINT    }, /* Inrush window (0.1 s) */
+    { "P07", &g_cfg.toc_ds,      1U,  50U,  1U, FMT_UINT    }, /* Over-current trip delay (0.1 s) */
+    { "P08", &g_cfg.delay_min,   1U,  10U,  1U, FMT_MINUTES }, /* Restart delay (minutes) */
+    { "P09", &g_cfg.ret_cnt,     1U,   5U,  1U, FMT_UINT    }, /* OC trips before LOC3 lockout */
 };
 #define N_PARAMS   (sizeof(k_params) / sizeof(k_params[0]))
 #define ITEM_SAVE  N_PARAMS
 #define ITEM_RST   (N_PARAMS + 1U)
 #define ITEM_TOTAL (N_PARAMS + 2U)
 
+/* Service background tasks (watchdog, VDD measurement, keypad, display) inside blocking UI loops */
 static void ui_idle(void)
 {
     hal_wdg_kick();
@@ -35,6 +38,7 @@ static void ui_idle(void)
     display_flush();
 }
 
+/* Safe terminal state after SAVE: relay forced OFF, LED OFF, displays "donE" until unplugged */
 static void halt_done(void)
 {
     hal_relay_set(false);
@@ -46,6 +50,7 @@ static void halt_done(void)
     }
 }
 
+/* Render parameter value in Level 2 using its native unit format */
 static void show_param_value(const Param_t *p)
 {
     switch (p->fmt) {
@@ -55,11 +60,13 @@ static void show_param_value(const Param_t *p)
     }
 }
 
+/* Validate that OV - HYS is at least 5 V higher than UV + HYS so a valid start window exists */
 static bool window_ok(void)
 {
     return (g_cfg.ov_v - g_cfg.hys_v) > (g_cfg.uv_v + g_cfg.hys_v + 5U);
 }
 
+/* Show a temporary status message ("Err" or "donE") for `ms` milliseconds */
 static void flash_message(const char *s, uint32_t ms)
 {
     display_text(s);
@@ -67,7 +74,9 @@ static void flash_message(const char *s, uint32_t ms)
     while ((uint32_t)(g_ms - t) < ms) ui_idle();
 }
 
-/* ---- Mode 2: 2-Level Settings Menu --------------------------------------- */
+/* ---- Mode 2: 2-Level Settings Menu ---------------------------------------
+ * Level 1: Browse P01..P09 <-> SAVE <-> rSt using '+' and '-' (clamped at ends).
+ * Level 2: Press OK on P01..P09 to edit value with '+' and '-', press OK again to return. */
 void mode_settings(void)
 {
     hal_relay_set(false);
@@ -128,14 +137,16 @@ void mode_settings(void)
     }
 }
 
-/* ---- Mode 3: Sensor Calibration (Steady Readout + Instant Key Snap) ------ */
+/* ---- Mode 3: Sensor Calibration (Steady 5 Hz Readout + Instant Key Snap) - */
 typedef struct {
-    int32_t  ema_q5;
-    uint16_t shown;
-    uint32_t last_ms;
+    int32_t  ema_q5;     /* Calibration EMA accumulator in Q5 fixed-point (alpha = 1/16) */
+    uint16_t shown;      /* Last value displayed on TM1637 */
+    uint32_t last_ms;    /* Timestamp of last 200 ms (5 Hz) display update */
     bool     init;
 } CalView_t;
 
+/* Smooth raw 20 ms blocks at 5 Hz with a 2-LSB deadband for easy reading,
+ * while snapping immediately (`snap = true`) whenever '+' or '-' is pressed. */
 static uint16_t cal_view_update(CalView_t *v, uint16_t sample, bool snap)
 {
     int32_t x = (int32_t)sample * 32;
@@ -157,6 +168,7 @@ static uint16_t cal_view_update(CalView_t *v, uint16_t sample, bool snap)
     return v->shown;
 }
 
+/* Display prompt string ("C-0" or "SAVE") and wait for a clean 'OK' press */
 static void wait_ok(const char *label)
 {
     display_text(label);
@@ -164,12 +176,13 @@ static void wait_ok(const char *label)
     while (input_get_event() != KEY_EVT_OK) ui_idle();
 }
 
+/* Adjust Q12 calibration multiplier: fine step (2) on single tap, coarse step (24) when held */
 static void adjust_trim(uint16_t *trim_q12, KeyEvent_t e)
 {
     int32_t step = input_is_repeating() ? 24 : 2;
     int32_t nv   = (int32_t)*trim_q12 + ((e == KEY_EVT_PLUS) ? step : -step);
-    if (nv < 512)   nv = 512;
-    if (nv > 16383) nv = 16383;
+    if (nv < 512)   nv = 512;     /* Minimum 0.125x gain trim */
+    if (nv > 16383) nv = 16383;   /* Maximum 4.000x gain trim */
     *trim_q12 = (uint16_t)nv;
 }
 
@@ -178,7 +191,8 @@ void mode_cal(void)
     hal_relay_set(false);
     alerts_set_led(LED_FAST);
 
-    /* Step 1: Zero offset baseline (0V AC, 0A) - reject if live mains is present */
+    /* Step 1 ("C-0"): Measure zero-input ADC noise floor (0 V AC, 0 A).
+     * Rejects capture with "Err" if live AC mains is still connected (noise > 300 Q6). */
     for (;;) {
         wait_ok("C-0");
         display_text("----");
@@ -199,7 +213,7 @@ void mode_cal(void)
         flash_message("Err", 1500UL);
     }
 
-    /* Step 2: AC Voltage gain trim (0.1 V resolution, steady 5 Hz readout) */
+    /* Step 2 ("C-V"): Plug in live AC mains and trim cal_v_q12 to match reference voltmeter (0.1 V) */
     display_text("C-V");
     input_wait_release();
     CalView_t cv      = { 0 };
@@ -221,7 +235,7 @@ void mode_cal(void)
     }
 
 #if ENABLE_CT
-    /* Step 3: Current gain trim (press OK to energize relay, or '+' to skip to SAVE) */
+    /* Step 3 ("C-A"): Press OK to close relay and trim current to clamp meter, or '+' to skip */
     fsm_refresh_limits();
     display_text("C-A");
     input_wait_release();
@@ -233,7 +247,7 @@ void mode_cal(void)
         ui_idle();
         KeyEvent_t e = input_get_event();
         if (!running) {
-            if (e == KEY_EVT_PLUS) break;
+            if (e == KEY_EVT_PLUS) break; /* Skip current calibration when no load/12V is attached */
             if (e == KEY_EVT_OK) {
                 if (fsm_voltage_ok_to_start()) {
                     fsm_relay_on();
@@ -248,6 +262,7 @@ void mode_cal(void)
             display_text("C-A");
             continue;
         }
+        /* Keep fast 20 ms OV/UV/OC protection active while testing live load in C-A */
         if (fsm_fault() != FAULT_NONE) {
             hal_relay_set(false);
             alerts_beep(BEEP_ALERT);
@@ -270,7 +285,7 @@ void mode_cal(void)
     }
 #endif
 
-    /* Step 4: Save calibration to Flash */
+    /* Step 4 ("SAVE"): Commit zero offsets and gain trims to Flash, beep, and halt on "donE" */
     wait_ok("SAVE");
     (void)nvm_save();
     alerts_beep(BEEP_CONFIRM);
