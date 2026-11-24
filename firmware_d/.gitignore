@@ -3,3 +3,8 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+build_native/fw.*
+build_native/nvm.ld
+build_native/ch32fun_clang.c
+mc_build/
+tools/minichlink
