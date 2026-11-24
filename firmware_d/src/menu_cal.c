@@ -1,6 +1,8 @@
 /* [#09] menu_cal.c - Mode 2 (Sett: P01..P09, SAVE, rSt) and Mode 3 (CAL: C-0, C-V, C-A, SAVE). */
 #include "system.h"
 
+#define CAL_ZERO_MAX_Q6 300U   /* ~4.7 ADC RMS counts: reject C-0 if live 220V AC is still plugged in */
+
 typedef enum { FMT_UINT, FMT_MINUTES, FMT_AMPS } ParamFmt_t;
 typedef struct {
     const char *code;
@@ -65,12 +67,7 @@ static void flash_message(const char *s, uint32_t ms)
     while ((uint32_t)(g_ms - t) < ms) ui_idle();
 }
 
-/* ---- Mode 2: 2-Level Settings Menu ---------------------------------------
- * 1. Show "Sett" -> press Center (OK) to enter parameter menu ("P01")
- * 2. Browse P01..P09 -> SAVE -> rSt with '+' and '-' (clamped at both ends)
- * 3. Press Center (OK) on P01..P09 to show/edit value with '+' and '-'
- * 4. Press Center (OK) when done to return to parameter menu
- * 5. Press Center (OK) on SAVE to commit & finish; on rSt to reset defaults */
+/* ---- Mode 2: 2-Level Settings Menu --------------------------------------- */
 void mode_settings(void)
 {
     hal_relay_set(false);
@@ -87,19 +84,14 @@ void mode_settings(void)
         KeyEvent_t e = input_get_event();
 
         if (!editing) {
-            /* Level 1: Navigate parameter codes (P01..P09, SAVE, rSt) without wrapping */
             if (step < N_PARAMS)        display_text(k_params[step].code);
             else if (step == ITEM_SAVE) display_text("SAVE");
             else                        display_text("rSt");
 
             if (e == KEY_EVT_PLUS) {
-                if ((step + 1U) < ITEM_TOTAL) {
-                    step++;
-                }
+                if ((step + 1U) < ITEM_TOTAL) step++;
             } else if (e == KEY_EVT_MINUS) {
-                if (step > 0U) {
-                    step--;
-                }
+                if (step > 0U) step--;
             } else if (e == KEY_EVT_OK) {
                 if (step < N_PARAMS) {
                     editing = true;
@@ -121,7 +113,6 @@ void mode_settings(void)
                 }
             }
         } else {
-            /* Level 2: Show & edit active parameter value */
             const Param_t *p = &k_params[step];
             show_param_value(p);
 
@@ -137,7 +128,35 @@ void mode_settings(void)
     }
 }
 
-/* ---- Mode 3: Sensor Calibration ------------------------------------------ */
+/* ---- Mode 3: Sensor Calibration (Steady Readout + Instant Key Snap) ------ */
+typedef struct {
+    int32_t  ema_q5;
+    uint16_t shown;
+    uint32_t last_ms;
+    bool     init;
+} CalView_t;
+
+static uint16_t cal_view_update(CalView_t *v, uint16_t sample, bool snap)
+{
+    int32_t x = (int32_t)sample * 32;
+    if (!v->init || snap) {
+        v->ema_q5  = x;
+        v->shown   = sample;
+        v->last_ms = g_ms;
+        v->init    = true;
+        return v->shown;
+    }
+    v->ema_q5 += (x - v->ema_q5) / 16;
+    if ((uint32_t)(g_ms - v->last_ms) >= 200UL) {
+        v->last_ms = g_ms;
+        uint16_t avg = (uint16_t)((v->ema_q5 + 16) / 32);
+        int32_t diff = (int32_t)avg - (int32_t)v->shown;
+        if (diff < 0) diff = -diff;
+        if (diff >= 2) v->shown = avg;
+    }
+    return v->shown;
+}
+
 static void wait_ok(const char *label)
 {
     display_text(label);
@@ -159,24 +178,46 @@ void mode_cal(void)
     hal_relay_set(false);
     alerts_set_led(LED_FAST);
 
-    /* Step 1: Zero offset baseline (0V AC, 0A) */
-    wait_ok("C-0");
-    display_text("----");
-    display_flush();
-    g_cfg.zero_v_q6 = adc_measure_noise_q6(ADC_CH_VAC);
+    /* Step 1: Zero offset baseline (0V AC, 0A) - reject if live mains is present */
+    for (;;) {
+        wait_ok("C-0");
+        display_text("----");
+        display_flush();
+        uint16_t zv = adc_measure_noise_q6(ADC_CH_VAC);
+        uint16_t za = 0U;
 #if ENABLE_CT
-    g_cfg.zero_a_q6 = adc_measure_noise_q6(ADC_CH_CT);
+        za = adc_measure_noise_q6(ADC_CH_CT);
 #endif
+        if (zv <= CAL_ZERO_MAX_Q6 && za <= CAL_ZERO_MAX_Q6) {
+            g_cfg.zero_v_q6 = zv;
+#if ENABLE_CT
+            g_cfg.zero_a_q6 = za;
+#endif
+            break;
+        }
+        alerts_beep(BEEP_ALERT);
+        flash_message("Err", 1500UL);
+    }
 
-    /* Step 2: AC Voltage gain trim (0.1 V resolution) */
+    /* Step 2: AC Voltage gain trim (0.1 V resolution, steady 5 Hz readout) */
     display_text("C-V");
     input_wait_release();
+    CalView_t cv      = { 0 };
+    uint32_t  last_bv = g_sens.blocks;
+    bool      snap_v  = true;
     for (;;) {
         ui_idle();
         KeyEvent_t e = input_get_event();
-        if (e == KEY_EVT_PLUS || e == KEY_EVT_MINUS) adjust_trim(&g_cfg.cal_v_q12, e);
+        if (e == KEY_EVT_PLUS || e == KEY_EVT_MINUS) {
+            adjust_trim(&g_cfg.cal_v_q12, e);
+            snap_v = true;
+        }
         if (e == KEY_EVT_OK) break;
-        display_uint_pad4(g_sens.vac_avg_dv);
+        if (g_sens.blocks != last_bv) {
+            last_bv = g_sens.blocks;
+            display_uint_pad4(cal_view_update(&cv, g_sens.vac_raw_dv, snap_v));
+            snap_v = false;
+        }
     }
 
 #if ENABLE_CT
@@ -184,15 +225,25 @@ void mode_cal(void)
     fsm_refresh_limits();
     display_text("C-A");
     input_wait_release();
-    bool running = false;
+    bool      running = false;
+    CalView_t ca      = { 0 };
+    uint32_t  last_ba = g_sens.blocks;
+    bool      snap_a  = true;
     for (;;) {
         ui_idle();
         KeyEvent_t e = input_get_event();
         if (!running) {
-            if (e == KEY_EVT_PLUS) break; /* Skip C-A when no 12V / load is attached */
+            if (e == KEY_EVT_PLUS) break;
             if (e == KEY_EVT_OK) {
-                if (fsm_voltage_ok_to_start()) { fsm_relay_on(); running = true; }
-                else flash_message("E-UV", 1000UL);
+                if (fsm_voltage_ok_to_start()) {
+                    fsm_relay_on();
+                    running = true;
+                    ca.init = false;
+                    snap_a  = true;
+                    last_ba = g_sens.blocks;
+                } else {
+                    flash_message("E-UV", 1000UL);
+                }
             }
             display_text("C-A");
             continue;
@@ -206,9 +257,16 @@ void mode_cal(void)
             input_wait_release();
             continue;
         }
-        if (e == KEY_EVT_PLUS || e == KEY_EVT_MINUS) adjust_trim(&g_cfg.cal_a_q12, e);
+        if (e == KEY_EVT_PLUS || e == KEY_EVT_MINUS) {
+            adjust_trim(&g_cfg.cal_a_q12, e);
+            snap_a = true;
+        }
         if (e == KEY_EVT_OK) { hal_relay_set(false); break; }
-        display_labeled('A', g_sens.i_avg_ca);
+        if (g_sens.blocks != last_ba) {
+            last_ba = g_sens.blocks;
+            display_labeled('A', cal_view_update(&ca, g_sens.i_raw_ca, snap_a));
+            snap_a = false;
+        }
     }
 #endif
 

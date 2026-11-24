@@ -2,6 +2,8 @@
  * non-blocking LED (PD5) and active buzzer (PC0) sequencer. */
 #include "system.h"
 
+#define KEY_ADC_PLUS_MIN 25U   /* Reject multi-button mash / shorted ladder (< 25 counts) */
+
 typedef enum { K_NONE, K_MINUS, K_MENU, K_PLUS } KeyCode_t;
 
 static KeyEvent_t pending = KEY_EVT_NONE;
@@ -15,7 +17,8 @@ static KeyCode_t decode_key(uint16_t adc)
     if (adc >= KEY_ADC_NONE_MIN)  return K_NONE;
     if (adc >= KEY_ADC_MINUS_MIN) return K_MINUS;
     if (adc >= KEY_ADC_MENU_MIN)  return K_MENU;
-    return K_PLUS;
+    if (adc >= KEY_ADC_PLUS_MIN)  return K_PLUS;
+    return K_NONE;
 }
 
 static void on_key_change(KeyCode_t now)
