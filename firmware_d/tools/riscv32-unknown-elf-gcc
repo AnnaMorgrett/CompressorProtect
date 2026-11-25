@@ -1,3 +1,0 @@
-#!/data/data/com.termux/files/usr/bin/sh
-case "$1" in -dumpversion) echo 13.0.0; exit 0;; esac
-exec clang --target=riscv32-unknown-elf -fuse-ld=lld -Wno-unused-command-line-argument -Wno-ignored-optimization-argument -Wno-unknown-warning-option "$@"

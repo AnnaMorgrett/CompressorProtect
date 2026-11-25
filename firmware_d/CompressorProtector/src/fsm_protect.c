@@ -12,6 +12,7 @@ static ProtState_t st;
 static FaultCode_t trip_fault;
 static volatile FaultCode_t fault_isr;          /* Fault flag set inside 20 ms DMA interrupt */
 static volatile uint32_t run_ms, oc_acc_ms;     /* Relay-on elapsed time & sustained OC timer */
+static volatile uint8_t  uv_cnt, ov_cnt;        /* Consecutive-block counters for UV/OV debounce */
 
 /* Pre-scaled thresholds in 0.1 V (dV), 0.01 A (cA), and ms for fast integer ISR comparison */
 static uint16_t lim_ov_dv, lim_uv_dv, lim_oc_ca, lim_inrush_ca;
@@ -19,7 +20,8 @@ static uint16_t lim_start_lo_dv, lim_start_hi_dv;
 static uint32_t lim_tin_ms, lim_toc_ms;
 
 static uint16_t delay_left_s;
-static uint32_t t_enter_ms, t_tick_ms, t_beep_ms, run_start_ms;
+static uint32_t t_enter_ms, t_tick_ms, t_beep_ms, run_start_ms, t_disp_ms;
+static bool show_amps;   /* RUN display toggles between voltage and current every 2 s */
 
 /* Convert user settings (P01..P07) into pre-scaled integer thresholds */
 void fsm_refresh_limits(void)
@@ -42,6 +44,7 @@ const char *fsm_fault_text(FaultCode_t f)
         case FAULT_OV: return "E-OV";
         case FAULT_OC: return "E-OC";
         case FAULT_OT: return "E-Ot";
+        case FAULT_SENSOR: return "E-SE";
         default:       return "E---";
     }
 }
@@ -61,8 +64,9 @@ void fsm_on_block(const SensorData_t *s)
 
     /* 1. Instant 20 ms Under-Voltage / Over-Voltage trip */
     uint16_t v = s->vac_raw_dv;
-    if (v < lim_uv_dv) { isr_trip(FAULT_UV); return; }
-    if (v > lim_ov_dv) { isr_trip(FAULT_OV); return; }
+    /* Debounced: needs TRIP_V_BLOCKS consecutive bad cycles, so one EMI-corrupted block cannot cut the compressor */
+    if (v < lim_uv_dv) { if (++uv_cnt >= TRIP_V_BLOCKS) { isr_trip(FAULT_UV); return; } } else uv_cnt = 0U;
+    if (v > lim_ov_dv) { if (++ov_cnt >= TRIP_V_BLOCKS) { isr_trip(FAULT_OV); return; } } else ov_cnt = 0U;
 
 #if ENABLE_CT
     /* 2. Compressor Current Protection:
@@ -87,6 +91,8 @@ void fsm_relay_on(void)
 {
     run_ms    = 0;
     oc_acc_ms = 0;
+    uv_cnt    = 0U;
+    ov_cnt    = 0U;
     fault_isr = FAULT_NONE;
     hal_relay_set(true);
 }
@@ -97,7 +103,7 @@ FaultCode_t fsm_fault(void) { return fault_isr; }
 bool fsm_voltage_ok_to_start(void)
 {
     uint16_t v = g_sens.vac_raw_dv;
-    return g_sens.blocks > 0UL && v >= lim_start_lo_dv && v <= lim_start_hi_dv;
+    return g_sens.blocks > 0UL && hal_dsp_alive() && v >= lim_start_lo_dv && v <= lim_start_hi_dv;
 }
 
 /* Transition into ST_DELAY: relay OFF, 1 Hz slow LED, start P08 minute countdown */
@@ -115,6 +121,8 @@ static void enter_run(void)
 {
     fsm_relay_on();
     run_start_ms = g_ms;
+    t_disp_ms    = g_ms;
+    show_amps    = false;
     alerts_set_led(LED_ON);
     alerts_beep(BEEP_CONFIRM);
     st = ST_RUN;
@@ -169,6 +177,12 @@ void fsm_step(void)
     switch (st) {
     case ST_DELAY: {
         if (g_sens.blocks == 0UL) { display_text("----"); break; }
+        if (!hal_dsp_alive()) {                 /* Sensing dead: never count down, never start */
+            delay_left_s = g_cfg.delay_min * 60U;
+            t_tick_ms    = g_ms;
+            display_text("E-SE");
+            break;
+        }
         uint16_t v = g_sens.vac_raw_dv;
         bool low = v < lim_start_lo_dv, high = v > lim_start_hi_dv;
 
@@ -184,19 +198,23 @@ void fsm_step(void)
         if (!low && !high && delay_left_s == 0U) { enter_run(); break; }
 
         /* Alternate "E-UV"/"E-OV" and "MM:SS" every 1 s during abnormal voltage; otherwise show "MM:SS" */
-        if ((low || high) && ((g_ms / 1000UL) % 2UL)) display_text(low ? "E-UV" : "E-OV");
+        if ((low || high) && ((g_ms >> 10) & 1UL)) display_text(low ? "E-UV" : "E-OV");
         else                                          display_mmss(delay_left_s);
         break;
     }
     case ST_RUN: {
         if (fault_isr != FAULT_NONE) { enter_trip(fault_isr); break; }
+        if (!hal_dsp_alive()) { enter_trip(FAULT_SENSOR); break; }   /* Relay OFF if sensing stalls */
 #if ENABLE_CT
         /* Clear previous OC trip history after 3 minutes of continuous healthy operation */
         if (g_cfg.oc_fail && (uint32_t)(g_ms - run_start_ms) >= HEALTHY_CLEAR_MS) nvm_clear_fail();
 
         /* Alternate display every 2 seconds between Current ("A140") and Voltage (" 220") */
-        if (((g_ms - run_start_ms) / 2000UL) % 2UL) display_labeled('A', g_sens.i_disp_ca);
-        else
+        if ((uint32_t)(g_ms - t_disp_ms) >= 2000UL) { t_disp_ms += 2000UL; show_amps = !show_amps; }
+        if (show_amps) {
+            display_labeled('A', g_sens.i_disp_ca);
+            break;
+        }
 #endif
         display_uint((g_sens.vac_disp_dv + 5U) / 10U); /* Round 0.1 V to nearest whole Volt */
         break;

@@ -7,20 +7,6 @@
 #define NVM_VERSION     1U             /* Increment if SystemConfig_t struct layout ever changes */
 #define NVM_WORDS       (sizeof(SystemConfig_t) / 4U)  /* 64 bytes / 4 = 16 x 32-bit words */
 
-/* CH32V003 Flash controller (FLASH->CTLR and FLASH->STATR) bit definitions */
-#define FL_STRT         (1UL << 6)     /* Start erase or program operation */
-#define FL_LOCK         (1UL << 7)     /* Standard Flash lock bit */
-#define FL_FLOCK        (1UL << 15)    /* Fast-programming mode lock bit */
-#define FL_FTPG         (1UL << 16)    /* Fast page program mode (64 bytes) */
-#define FL_FTER         (1UL << 17)    /* Fast page erase mode (64 bytes) */
-#define FL_BUFLOAD      (1UL << 18)    /* Latch one 32-bit word into internal page write buffer */
-#define FL_BUFRST       (1UL << 19)    /* Clear internal 64-byte page write buffer */
-#define FL_STAT_BSY     (1UL << 0)     /* Flash controller busy flag */
-
-/* Hardware unlock keys required by CH32V003 Flash controller */
-#define NVM_KEY1        0x45670123UL
-#define NVM_KEY2        0xCDEF89ABUL
-
 /* Compute CRC-16/CCITT-FALSE checksum to detect blank or corrupted Flash pages */
 static uint16_t crc16(const uint8_t *p, uint32_t n)
 {
@@ -37,7 +23,7 @@ static uint16_t crc16(const uint8_t *p, uint32_t n)
 /* Spin safely until Flash erase/write finishes while keeping the 1.0 s watchdog fed */
 static void flash_wait(void)
 {
-    while (FLASH->STATR & FL_STAT_BSY) {
+    while (FLASH->STATR & REG_FLASH_STATR_BUSY) {
         hal_wdg_kick();
     }
 }
@@ -61,10 +47,10 @@ static void nvm_all_defaults(SystemConfig_t *c)
 {
     memset(c, 0, sizeof(*c));
     nvm_params_defaults(c);
-    c->cal_v_q12 = 3506U;   /* Bench-calibrated VAC gain trim for this hardware */
-    c->cal_a_q12 = 4096U;   /* Nominal 1.000x CT gain trim */
-    c->zero_v_q6 = 37U;     /* Bench-calibrated VAC zero-volt noise floor */
-    c->zero_a_q6 = 19U;     /* Bench-calibrated CT zero-amp noise floor */
+    c->cal_v_q12 = DEF_CAL_V_Q12; /* Nominal gain until CAL wizard is run */
+    c->cal_a_q12 = DEF_CAL_A_Q12;
+    c->zero_v_q6 = DEF_ZERO_Q6;
+    c->zero_a_q6 = DEF_ZERO_Q6;
     c->version   = NVM_VERSION;
 }
 
@@ -78,39 +64,39 @@ bool nvm_save(void)
     NVIC_DisableIRQ(DMA1_Channel1_IRQn);
 
     /* Unlock both standard Flash and Fast-Page Programming registers */
-    FLASH->KEYR     = NVM_KEY1;
-    FLASH->KEYR     = NVM_KEY2;
-    FLASH->MODEKEYR = NVM_KEY1;
-    FLASH->MODEKEYR = NVM_KEY2;
+    FLASH->KEYR     = REG_FLASH_KEY1;
+    FLASH->KEYR     = REG_FLASH_KEY2;
+    FLASH->MODEKEYR = REG_FLASH_KEY1;
+    FLASH->MODEKEYR = REG_FLASH_KEY2;
 
     flash_wait();
 
     /* Step 1: Erase the 64-byte page at 0x08003FC0 */
-    FLASH->CTLR |= FL_FTER;
+    FLASH->CTLR |= REG_FLASH_CTLR_FTER;
     FLASH->ADDR  = NVM_ADDR;
-    FLASH->CTLR |= FL_STRT;
+    FLASH->CTLR |= REG_FLASH_CTLR_START;
     flash_wait();
-    FLASH->CTLR &= ~FL_FTER;
+    FLASH->CTLR &= ~REG_FLASH_CTLR_FTER;
 
     /* Step 2: Reset internal page latch buffer and load 16 x 32-bit words */
-    FLASH->CTLR |= FL_FTPG;
-    FLASH->CTLR |= FL_BUFRST;
+    FLASH->CTLR |= REG_FLASH_CTLR_FTPG;
+    FLASH->CTLR |= REG_FLASH_CTLR_BUFRST;
     flash_wait();
 
     const uint32_t *src    = (const uint32_t *)&g_cfg;
     volatile uint32_t *dst = (volatile uint32_t *)NVM_ADDR;
     for (uint32_t i = 0; i < NVM_WORDS; i++) {
         dst[i] = src[i];
-        FLASH->CTLR |= FL_BUFLOAD;
+        FLASH->CTLR |= REG_FLASH_CTLR_BUFLOAD;
         flash_wait();
     }
 
     /* Step 3: Commit page buffer to Flash and re-lock controller */
     FLASH->ADDR  = NVM_ADDR;
-    FLASH->CTLR |= FL_STRT;
+    FLASH->CTLR |= REG_FLASH_CTLR_START;
     flash_wait();
-    FLASH->CTLR &= ~FL_FTPG;
-    FLASH->CTLR |= FL_LOCK | FL_FLOCK;
+    FLASH->CTLR &= ~REG_FLASH_CTLR_FTPG;
+    FLASH->CTLR |= REG_FLASH_CTLR_LOCK | REG_FLASH_CTLR_FLOCK;
 
     NVIC_EnableIRQ(DMA1_Channel1_IRQn);
 

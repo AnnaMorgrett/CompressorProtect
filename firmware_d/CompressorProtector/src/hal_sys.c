@@ -4,16 +4,7 @@
 
 volatile uint32_t g_ms = 0;         /* System uptime in milliseconds (rolls over after ~49.7 days) */
 static volatile bool relay_on = false; /* Shadow state of relay pin so ISR can check status fast */
-
-/* CH32V003 SysTick control register bits */
-#define ST_STE       (1UL << 0)     /* SysTick Counter Enable */
-#define ST_STIE      (1UL << 1)     /* SysTick Interrupt Enable */
-#define ST_STCLK     (1UL << 2)     /* Clock source: 1 = HCLK (48 MHz), 0 = HCLK/8 */
-
-/* CH32V003 Independent Watchdog (IWDG) magic unlock/reload keys */
-#define IWDG_UNLOCK  0x5555U        /* Enable write access to PSCR and RLDR registers */
-#define IWDG_RELOAD  0xAAAAU        /* Reset watchdog countdown timer ("kick the dog") */
-#define IWDG_START   0xCCCCU        /* Start watchdog hardware countdown */
+static uint32_t wd_blocks_seen = 0, wd_progress_ms = 0; /* DSP liveness tracking for watchdog */
 
 /* Drive a GPIO output LOW before enabling its push-pull driver to avoid power-on glitches */
 static void pin_out_low(uint32_t pin)
@@ -31,16 +22,17 @@ static void pin_in_pullup(uint32_t pin)
 
 void hal_init(void)
 {
-    /* Disable Hardware Prologue/Epilogue (HPE) interrupt register stacking so GCC's
-     * standard RISC-V interrupt attribute preserves s0/s1 safely without corruption. */
-    __asm__ volatile("csrw 0x804, %0" : : "r"(0));
+    /* INTSYSCR (0x804) = 0 turns HPE (hardware stacking + nesting) OFF. ch32fun documents that HPE does not
+     * preserve s0/s1, so with HPE off GCC's own interrupt prologue saves everything safely.
+     * Side effect: no interrupt nesting, so DMA ISR cannot preempt SysTick (both ISRs are short). */
+    cpu_hpe_off();
 
     /* Enable peripheral clocks for GPIO Ports A, C, D and Alternate Function I/O */
     RCC->APB2PCENR |= RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOC |
                       RCC_APB2Periph_GPIOD | RCC_APB2Periph_AFIO;
 
     /* Clear PA12_RM (bit 15) so PA1 and PA2 act as GPIO/ADC pins instead of external crystal pins */
-    AFIO->PCFR1 &= ~(1UL << 15);
+    AFIO->PCFR1 &= ~REG_AFIO_PA12_REMAP;
 
     /* 1. Initialize critical outputs LOW immediately at boot (relay OFF, buzzer OFF, LED OFF) */
     pin_out_low(PIN_RELAY);
@@ -67,27 +59,45 @@ void hal_init(void)
     SysTick->CTLR = 0;
     SysTick->SR   = 0;
     SysTick->CMP  = SysTick->CNT + SYSTICK_TICKS_1MS;
-    SysTick->CTLR = ST_STE | ST_STCLK | ST_STIE;
+    SysTick->CTLR = REG_SYSTICK_ENABLE | REG_SYSTICK_CLK_HCLK | REG_SYSTICK_IRQ_ENABLE;
     NVIC_EnableIRQ(SysTick_IRQn);
 
     /* 5. Start Independent Watchdog (IWDG) with 1.0 s timeout.
      * If firmware ever hangs or enters an infinite loop without calling hal_wdg_kick(),
      * the MCU automatically resets and forces PIN_RELAY LOW. */
-    IWDG->CTLR = IWDG_UNLOCK;
+    wd_progress_ms = g_ms;   /* Grace period for the first RMS block to arrive */
+    IWDG->CTLR = REG_IWDG_KEY_UNLOCK;
     IWDG->PSCR = IWDG_PRESCALER_CODE;
     IWDG->RLDR = IWDG_RELOAD_TICKS;
-    IWDG->CTLR = IWDG_RELOAD;
-    IWDG->CTLR = IWDG_START;
+    { uint32_t g = 100000UL; while ((IWDG->STATR & REG_IWDG_BUSY_MASK) && --g) {} }  /* Wait PVU/RVU: register update done */
+    IWDG->CTLR = REG_IWDG_KEY_RELOAD;
+    IWDG->CTLR = REG_IWDG_KEY_START;
 
 #if ENABLE_SWIO_LOG
     SetupDebugPrintf();
 #endif
 }
 
-/* Refresh the 1.0 s hardware watchdog timer (must be called regularly in main loop & wait loops) */
+/* Track whether the ADC -> DMA -> RMS chain keeps producing blocks */
+static void dsp_track(void)
+{
+    uint32_t b = g_sens.blocks;
+    if (b != wd_blocks_seen) { wd_blocks_seen = b; wd_progress_ms = g_ms; }
+}
+
+bool hal_dsp_alive(void)
+{
+    dsp_track();
+    return (uint32_t)(g_ms - wd_progress_ms) < DSP_ALIVE_MS;
+}
+
+/* Feed the hardware watchdog ONLY while sensing is alive. Protection trips run inside the DMA ISR,
+ * so a dead ADC/TIM1/DMA must never be hidden by a happy main loop: if no RMS block arrives for
+ * WDG_DSP_STALL_MS the dog is starved and the MCU resets (relay pin returns to its safe state). */
 void hal_wdg_kick(void)
 {
-    IWDG->CTLR = IWDG_RELOAD;
+    dsp_track();
+    if ((uint32_t)(g_ms - wd_progress_ms) < WDG_DSP_STALL_MS) IWDG->CTLR = REG_IWDG_KEY_RELOAD;
 }
 
 /* Turn compressor relay ON (true) or OFF (false) and update fast shadow variable */

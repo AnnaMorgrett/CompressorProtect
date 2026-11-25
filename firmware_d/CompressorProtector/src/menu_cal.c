@@ -262,7 +262,7 @@ void mode_cal(void)
         if (e == KEY_EVT_OK) break;
         if (g_sens.blocks != last_bv) {
             last_bv = g_sens.blocks;
-            display_uint_pad4(cal_view_update(&cv, g_sens.vac_raw_dv));
+            display_uint_pad4(cal_view_update(&cv, g_sens.vac_win_dv));
         }
     }
 
@@ -312,7 +312,7 @@ void mode_cal(void)
         if (e == KEY_EVT_OK) { hal_relay_set(false); break; }
         if (g_sens.blocks != last_ba) {
             last_ba = g_sens.blocks;
-            display_labeled('A', cal_view_update(&ca, g_sens.i_raw_ca));
+            display_labeled('A', cal_view_update(&ca, g_sens.i_win_ca));
         }
     }
 #endif

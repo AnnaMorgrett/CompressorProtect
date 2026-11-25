@@ -150,6 +150,7 @@ static volatile struct {
     bool     on;
 } beep;
 static bool led_last = false;
+static uint16_t ph1000 = 0, ph250 = 0;   /* LED phase counters: no software division inside the 1 ms ISR */
 
 void alerts_set_led(LedMode_t m) { led_mode = m; }
 
@@ -188,16 +189,16 @@ void alerts_tick_1ms(void)
         }
     }
 
+    if (++ph1000 >= 1000U) ph1000 = 0U;
+    if (++ph250  >= 250U)  ph250  = 0U;
+
     bool on = false;
-    uint32_t t = g_ms;
     switch (led_mode) {
-        case LED_ON:     on = true;                 break; /* Solid ON */
-        case LED_SLOW:   on = (t % 1000UL) < 500UL; break; /* 1 Hz (500 ms ON, 500 ms OFF) */
-        case LED_FAST:   on = (t % 250UL) < 125UL;  break; /* 4 Hz (125 ms ON, 125 ms OFF) */
-        case LED_DOUBLE: {
-            uint32_t p = t % 1000UL;                       /* Two 100 ms flashes per second */
-            on = (p < 100UL) || (p >= 250UL && p < 350UL);
-        } break;
+        case LED_ON:     on = true;                                     break; /* Solid ON */
+        case LED_SLOW:   on = ph1000 < 500U;                            break; /* 1 Hz */
+        case LED_FAST:   on = ph250 < 125U;                             break; /* 4 Hz */
+        case LED_DOUBLE: on = (ph1000 < 100U) ||
+                              (ph1000 >= 250U && ph1000 < 350U);        break; /* Two flashes per second */
         default: break;
     }
     if (on != led_last) {

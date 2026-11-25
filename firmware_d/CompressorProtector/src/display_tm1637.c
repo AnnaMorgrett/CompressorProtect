@@ -46,6 +46,7 @@ static uint8_t seg_for(char c)
         case 'A': return 0x77U;  case 'C': return 0x39U;  case 'd': return 0x5EU;
         case 'E': return 0x79U;  case 'L': return 0x38U;  case 'n': return 0x54U;
         case 'O': return 0x3FU;  case 'P': return 0x73U;  case 'r': return 0x50U;
+        case 'o': return 0x5CU;  /* was missing: "donE" showed as "d nE" */
         case 'S': return 0x6DU;  case 't': return 0x78U;  case 'U': return 0x3EU;
         case 'V': return 0x3EU;  case '-': return 0x40U;  case 'e': return 0x79U;
         default:  return 0x00U;

@@ -6,13 +6,6 @@
 
 #define BUF_HALF_WORDS     (SAMPLES_PER_BLOCK * ADC_NCH) /* 128 * 2 = 256 half-words per 20 ms half-buffer */
 
-/* CH32V003 ADC register bits */
-#define ADCX_SCAN          (1UL << 8)    /* CTLR1: Scan mode across RSQR sequence */
-#define ADCX_JEXTSEL_SOFT  (7UL << 12)   /* CTLR2: Injected group triggered by software (JSWSTART) */
-#define ADCX_JEXTTRIG      (1UL << 15)   /* CTLR2: Enable external/software trigger for injected group */
-#define ADCX_JSWSTART      (1UL << 21)   /* CTLR2: Start injected conversion now */
-#define ADCX_JEOC          (1UL << 2)    /* STATR: Injected conversion complete flag */
-
 #define TIM1_PERIOD        (SYSCLK_HZ / SAMPLE_RATE_HZ)   /* 48,000,000 / 6400 = 7500 timer ticks */
 #define INJ_SAFE_MIN       900U          /* Safe window start after TIM1 trigger (regular scan finished) */
 #define INJ_SAFE_MAX       6500U         /* Safe window end before next TIM1 trigger (at 7500) */
@@ -39,20 +32,31 @@ static uint32_t isqrt32(uint32_t n)
     return root;
 }
 
-/* Compute AC Mean-Square (variance) of 128 samples in Q12 fixed-point (= RMS_counts^2 * 4096).
- * Uses exact single-pass algebraic identity: N * sum(x^2) - (sum(x))^2 = N^2 * variance.
- * Removing DC bias mathematically here avoids midpoint drift errors without a second loop. */
-static uint32_t block_ms_q12(const volatile uint16_t *blk, uint8_t offset)
+/* Per-block running sums. Kept for the last WIN_BLOCKS blocks so a 4-cycle (80 ms) window can be formed
+ * without touching the samples again. A longer window shrinks the error caused by the window not being
+ * exactly N AC cycles (HSI is +-2.2 % over temperature and mains frequency also wanders). */
+typedef struct { uint32_t sum, sumsq; } BlkSum_t;
+static BlkSum_t ring[ADC_NCH][WIN_BLOCKS];
+static uint8_t  ring_idx, ring_fill;
+
+static BlkSum_t block_sums(const volatile uint16_t *blk, uint8_t offset)
 {
-    uint32_t sum = 0, sumsq = 0;
+    BlkSum_t r = { 0, 0 };
     for (uint32_t i = 0; i < SAMPLES_PER_BLOCK; i++) {
         uint32_t x = blk[i * ADC_NCH + offset];
-        sum   += x;
-        sumsq += x * x;
+        r.sum   += x;
+        r.sumsq += x * x;
     }
-    /* Since N = 128, N^2 = 16384. Dividing by 4 (>> 2) scales variance by 4096 (Q12). */
-    uint64_t num = (uint64_t)sumsq * SAMPLES_PER_BLOCK - (uint64_t)sum * sum;
-    return (uint32_t)(num >> 2);
+    return r;
+}
+
+/* Variance in Q12 (= RMS_counts^2 * 4096) from sums over n = 2^k samples:
+ *   N*sum(x^2) - (sum x)^2 = N^2 * variance  ->  Q12 value = that >> (2k - 12).
+ * DC bias is removed mathematically, no separate midpoint needed. */
+static uint32_t ms_q12(uint32_t sum, uint32_t sumsq, uint32_t n, uint8_t shift)
+{
+    uint64_t num = (uint64_t)sumsq * n - (uint64_t)sum * sum;
+    return (uint32_t)(num >> shift);
 }
 
 /* Convert raw ADC RMS (Q6) into physical units (0.1 V or 0.01 A):
@@ -102,27 +106,52 @@ static void process_block(const volatile uint16_t *blk)
     /* Discard first 5 blocks (100 ms) after boot while mid-rail coupling capacitors charge */
     if (warmup) { warmup--; return; }
 
-    /* Single-cycle (20 ms, 128-sample) True-RMS in Q6 fixed-point (= ADC RMS counts * 64).
-     * Decoupled from multi-block averaging so fault protection responds within 1 AC cycle (REQ-05). */
-    uint32_t v_q6 = isqrt32(block_ms_q12(blk, 0));
+    BlkSum_t s[ADC_NCH];
+    for (uint8_t ch = 0; ch < ADC_NCH; ch++) {
+        s[ch] = block_sums(blk, ch);
+        ring[ch][ring_idx] = s[ch];
+    }
+    ring_idx = (uint8_t)((ring_idx + 1U) & (WIN_BLOCKS - 1U));
+    if (ring_fill < WIN_BLOCKS) ring_fill++;
+
+    /* Single-cycle (20 ms) True-RMS: used ONLY for the fast protection path (REQ-05). */
+    uint32_t v_q6 = isqrt32(ms_q12(s[0].sum, s[0].sumsq, SAMPLES_PER_BLOCK, 2U));
     g_sens.vac_rms_q6 = (uint16_t)v_q6;
     g_sens.vac_raw_dv = to_units(v_q6, g_cfg.zero_v_q6, g_cfg.cal_v_q12, DEF_GAIN_V_Q8);
 
 #if ENABLE_CT
-    uint32_t a_q6 = isqrt32(block_ms_q12(blk, 1));
+    uint32_t a_q6 = isqrt32(ms_q12(s[1].sum, s[1].sumsq, SAMPLES_PER_BLOCK, 2U));
     g_sens.ct_rms_q6 = (uint16_t)a_q6;
     g_sens.i_raw_ca  = to_units(a_q6, g_cfg.zero_a_q6, g_cfg.cal_a_q12, DEF_GAIN_A_Q8);
 #endif
 
+    /* 4-cycle (512-sample) window for display and calibration: N = 512 -> shift = 2*9 - 12 = 6 */
+    if (ring_fill == WIN_BLOCKS) {
+        for (uint8_t ch = 0; ch < ADC_NCH; ch++) {
+            uint32_t sum = 0, sumsq = 0;
+            for (uint8_t k = 0; k < WIN_BLOCKS; k++) { sum += ring[ch][k].sum; sumsq += ring[ch][k].sumsq; }
+            uint32_t q6 = isqrt32(ms_q12(sum, sumsq, SAMPLES_PER_BLOCK * WIN_BLOCKS, 6U));
+            if (ch == 0U) g_sens.vac_win_dv = to_units(q6, g_cfg.zero_v_q6, g_cfg.cal_v_q12, DEF_GAIN_V_Q8);
+#if ENABLE_CT
+            else          g_sens.i_win_ca   = to_units(q6, g_cfg.zero_a_q6, g_cfg.cal_a_q12, DEF_GAIN_A_Q8);
+#endif
+        }
+    } else {
+        g_sens.vac_win_dv = g_sens.vac_raw_dv;
+#if ENABLE_CT
+        g_sens.i_win_ca   = g_sens.i_raw_ca;
+#endif
+    }
+
     g_sens.blocks++;
 
-    /* 1. FAST PATH: Check OV, UV, Inrush, and OC thresholds immediately (20 ms single-cycle response) */
+    /* 1. FAST PATH: OV, UV, inrush and OC checks on the unfiltered single-cycle values */
     fsm_on_block(&g_sens);
 
-    /* 2. STABLE PATH: Update smoothed display numbers from decoupled 20 ms RMS (REQ-16) */
-    g_sens.vac_disp_dv = filter_update(&filt_v, g_sens.vac_raw_dv, V_SNAP_DV, V_DEAD_DV, &g_sens.vac_avg_dv);
+    /* 2. STABLE PATH: smoothed display numbers come from the more accurate 4-cycle window */
+    g_sens.vac_disp_dv = filter_update(&filt_v, g_sens.vac_win_dv, V_SNAP_DV, V_DEAD_DV, &g_sens.vac_avg_dv);
 #if ENABLE_CT
-    g_sens.i_disp_ca   = filter_update(&filt_a, g_sens.i_raw_ca, A_SNAP_CA, A_DEAD_CA, &g_sens.i_avg_ca);
+    g_sens.i_disp_ca   = filter_update(&filt_a, g_sens.i_win_ca, A_SNAP_CA, A_DEAD_CA, &g_sens.i_avg_ca);
 #endif
 }
 
@@ -156,14 +185,14 @@ void adc_init(void)
 
     /* Set 43-cycle sample-and-hold time on VAC, CT, KEY, and VREF channels */
     uint32_t t = ADC_SAMPLE_TIME_CODE;
-    ADC1->SAMPTR2 = (t << (3U * ADC_CH_VAC)) | (t << (3U * ADC_CH_CT)) |
-                    (t << (3U * ADC_CH_KEY)) | (t << (3U * ADC_CH_VREF));
+    ADC1->SAMPTR2 = (t << (REG_ADC_SAMPTR_BITS * ADC_CH_VAC)) | (t << (REG_ADC_SAMPTR_BITS * ADC_CH_CT)) |
+                    (t << (REG_ADC_SAMPTR_BITS * ADC_CH_KEY)) | (t << (REG_ADC_SAMPTR_BITS * ADC_CH_VREF));
 
     /* Configure Regular Scan sequence: 2 conversions -> Step 1: VAC (ch0), Step 2: CT (ch1) */
-    ADC1->RSQR1 = (uint32_t)(ADC_NCH - 1U) << 20;
-    ADC1->RSQR3 = ADC_CH_VAC | ((uint32_t)ADC_CH_CT << 5);
-    ADC1->CTLR1 = ADCX_SCAN;
-    ADC1->CTLR2 = ADC_ADON | ADCX_JEXTTRIG | ADCX_JEXTSEL_SOFT;
+    ADC1->RSQR1 = (uint32_t)(ADC_NCH - 1U) << REG_ADC_RSQR1_LEN_SHIFT;
+    ADC1->RSQR3 = ADC_CH_VAC | ((uint32_t)ADC_CH_CT << REG_ADC_RSQR3_SLOT_SHIFT);
+    ADC1->CTLR1 = REG_ADC_CTLR1_SCAN;
+    ADC1->CTLR2 = ADC_ADON | REG_ADC_CTLR2_JEXTTRIG | REG_ADC_CTLR2_JEXTSEL_SW;
     Delay_Us(20);
 
     /* Run CH32V003 built-in ADC capacitor offset calibration */
@@ -178,7 +207,7 @@ void adc_init(void)
 /* Start circular DMA1 transfers and launch TIM1 6400 Hz hardware trigger */
 void adc_start(void)
 {
-    /* Give 20 ms DSP/protection ISR highest priority (0x00), above 1 ms SysTick (0x80) */
+    /* Priority only decides which ISR runs first when both are pending (HPE/nesting is off) */
     NVIC_SetPriority(DMA1_Channel1_IRQn, 0x00U);
     NVIC_SetPriority(SysTick_IRQn, 0x80U);
 
@@ -201,7 +230,7 @@ void adc_start(void)
 
     /* Start TIM1 up-counter at 48 MHz / 7500 = 6400 Hz trigger rate */
     TIM1->CTLR1  = 0;
-    TIM1->CTLR2  = (2U << 4);   /* MMS = 010: Timer Update event generates TRGO pulse */
+    TIM1->CTLR2  = REG_TIM1_MMS_UPDATE; /* Timer update event generates the TRGO pulse */
     TIM1->PSC    = 0;
     TIM1->ATRLR  = TIM1_PERIOD - 1U;
     TIM1->RPTCR  = 0;
@@ -222,11 +251,11 @@ uint16_t adc_read_injected(uint8_t channel)
         uint32_t c;
         do { c = TIM1->CNT; } while (c < INJ_SAFE_MIN || c > INJ_SAFE_MAX);
     }
-    ADC1->ISQR   = (uint32_t)channel << 15; /* Select single injected channel in JSQ4 slot */
-    ADC1->STATR &= ~ADCX_JEOC;
-    ADC1->CTLR2 |= ADCX_JSWSTART;           /* Trigger injected conversion */
+    ADC1->ISQR   = (uint32_t)channel << REG_ADC_ISQR_JSQ4_SHIFT; /* Select single injected channel in JSQ4 slot */
+    ADC1->STATR &= ~REG_ADC_STATR_JEOC;
+    ADC1->CTLR2 |= REG_ADC_CTLR2_JSWSTART;           /* Trigger injected conversion */
     uint32_t guard = 2000U;
-    while (!(ADC1->STATR & ADCX_JEOC) && --guard) {}
+    while (!(ADC1->STATR & REG_ADC_STATR_JEOC) && --guard) {}
     result = (uint16_t)ADC1->IDATAR1;
     __enable_irq();
     return result;

@@ -46,15 +46,20 @@
 #endif
 
 /* ---- System Clock, Sampling & Watchdog Timing --------------------------- */
-#define SYSCLK_HZ 48000000UL                   /* 48 MHz core & peripheral clock (HSI x 2 PLL) */
+#define SYSCLK_HZ ((uint32_t)FUNCONF_SYSTEM_CORE_CLOCK) /* Taken from funconfig.h so code and clock can never disagree */
 #define SAMPLE_RATE_HZ 6400UL                  /* 6400 Hz per channel = 128 samples per 50 Hz AC cycle */
 #define SAMPLES_PER_BLOCK 128U                 /* 128 samples @ 6400 Hz = exactly 20 ms (1 AC cycle)   */
+#define WIN_BLOCKS 4U                          /* Accuracy window: 4 cycles (80 ms) - cuts HSI/mains-frequency leakage ~4x */
 #define BLOCK_MS 20U                           /* Duration of one DMA half-buffer block in milliseconds*/
 #define ADC_SAMPLE_TIME_CODE 4U                /* 4 = 43 ADC clock cycles @ 12 MHz (safe for <= 6k imp)*/
 #define ADC_WARMUP_BLOCKS 5U                   /* Ignore first 5 blocks (100 ms) while DC-bias caps settle */
 #define SYSTICK_TICKS_1MS (SYSCLK_HZ / 1000UL) /* 48,000 clock ticks per 1 ms SysTick interrupt        */
 #define IWDG_PRESCALER_CODE 4U                 /* Independent Watchdog clock: 128 kHz LSI / 64 = 2 kHz */
 #define IWDG_RELOAD_TICKS 2000U                /* 2000 ticks @ 2 kHz = 1.0 second watchdog reset timeout */
+
+_Static_assert(FUNCONF_SYSTEM_CORE_CLOCK == 48000000UL, "funconfig.h must select 48 MHz (HSI + PLL x2)");
+_Static_assert((FUNCONF_SYSTEM_CORE_CLOCK % SAMPLE_RATE_HZ) == 0UL, "TIM1 period must be an integer");
+_Static_assert(SAMPLES_PER_BLOCK == 128U && WIN_BLOCKS == 4U, "adc_dsp.c shifts assume 128 samples x 4 blocks");
 
 /* ---- Analog Front-End Hardware Values (Sets Nominal Uncalibrated Gain) --
  * VAC divider (EasyEDA V1.0 BOM): Mains -> R14 (820 kOhm) -> ZMPT101B (1:1) -> Burden R8 (100 Ohm) -> PA2.
@@ -92,9 +97,17 @@
 #define DISPLAY_BRIGHTNESS 4U /* TM1637 LED brightness level (0 = dimmest, 7 = brightest) */
 
 /* ---- Protection State Machine Timers ------------------------------------ */
+#define TRIP_V_BLOCKS 3U          /* UV/OV must persist 3 consecutive 20 ms blocks (60 ms) before trip; 1 = old instant trip */
+#define DSP_ALIVE_MS 100UL        /* No new RMS block for 100 ms = sensing dead -> relay OFF (E-SE) */
+#define WDG_DSP_STALL_MS 300UL    /* Watchdog is NOT fed if sensing has been dead this long -> forced reset */
 #define TRIP_SHOW_MS 3000UL       /* Show fault code ("E-UV", "E-OV", "E-OC") for 3 seconds */
 #define HEALTHY_CLEAR_MS 180000UL /* 3 minutes (180,000 ms) of fault-free run resets OC trip counter */
 #define LOCKOUT_BEEP_MS 30000UL   /* Repeat warning double-beep every 30 seconds while in LOC3 */
+
+/* ---- Uncalibrated sensor defaults (used when Flash is blank; run the CAL wizard on every new board) */
+#define DEF_CAL_V_Q12 4096U /* 1.0000x voltage trim (nominal gain from FE_R14/FE_R8) */
+#define DEF_CAL_A_Q12 4096U /* 1.0000x current trim */
+#define DEF_ZERO_Q6   0U    /* No zero-input noise floor subtracted until C-0 is run */
 
 /* ---- Factory Default Protection Settings (Indonesia 220 V / 50 Hz) ------ */
 #define DEF_OV_V 245U    /* P01: Over-voltage trip threshold = 245 V */

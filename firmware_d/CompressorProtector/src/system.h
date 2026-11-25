@@ -3,6 +3,7 @@
 #define SYSTEM_H
 
 #include "config.h"
+#include "regs.h"
 
 /* Persistent configuration stored in the top 64-byte Flash page (0x08003FC0).
  * Must be exactly 64 bytes so one fast-page erase/write commits the entire struct. */
@@ -41,6 +42,8 @@ typedef struct {
     volatile uint16_t i_avg_ca;      /* EMA-only current in 0.01 A (no deadband)                     */
     volatile uint16_t vac_rms_q6;    /* Raw 20 ms AC RMS voltage in ADC counts x 64 (before zero/gain)*/
     volatile uint16_t ct_rms_q6;     /* Raw 20 ms AC RMS current in ADC counts x 64 (before zero/gain)*/
+    volatile uint16_t vac_win_dv;    /* 4-cycle (80 ms) RMS voltage in 0.1 V: most accurate, used for display + CAL */
+    volatile uint16_t i_win_ca;      /* 4-cycle (80 ms) RMS current in 0.01 A: most accurate, used for display + CAL */
     volatile uint16_t vdd_mv;        /* Measured MCU supply voltage in mV (via internal 1.2V VREF)   */
     volatile uint32_t blocks;        /* Counter incremented every valid 20 ms AC cycle processed     */
 } SensorData_t;
@@ -51,7 +54,8 @@ typedef enum {
     FAULT_UV,         /* Under-voltage ("E-UV") */
     FAULT_OV,         /* Over-voltage ("E-OV") */
     FAULT_OC,         /* Over-current or locked-rotor stall ("E-OC") */
-    FAULT_OT          /* Reserved over-temperature ("E-Ot") */
+    FAULT_OT,         /* Reserved over-temperature ("E-Ot") */
+    FAULT_SENSOR      /* Sensing/DSP stalled ("E-SE"): relay forced OFF */
 } FaultCode_t;
 
 /* Top-level operating mode selected once at power-up */
@@ -94,7 +98,8 @@ extern volatile uint32_t g_ms;   /* Free-running 1 ms uptime counter */
 
 /* [#03] hal_sys.c - Hardware abstraction, GPIO, SysTick, Watchdog */
 void     hal_init(void);
-void     hal_wdg_kick(void);
+void     hal_wdg_kick(void);   /* Feeds IWDG ONLY while the ADC/DMA/DSP chain is alive */
+bool     hal_dsp_alive(void);  /* true if a fresh 20 ms RMS block arrived within DSP_ALIVE_MS */
 void     hal_relay_set(bool on);
 bool     hal_relay_is_on(void);
 void     hal_log(void);
