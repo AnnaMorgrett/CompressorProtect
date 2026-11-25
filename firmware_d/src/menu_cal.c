@@ -63,7 +63,7 @@ static void show_param_value(const Param_t *p)
 /* Validate that OV - HYS is at least 5 V higher than UV + HYS so a valid start window exists */
 static bool window_ok(void)
 {
-    return (g_cfg.ov_v - g_cfg.hys_v) > (g_cfg.uv_v + g_cfg.hys_v + 5U);
+    return (uint32_t)g_cfg.ov_v > ((uint32_t)g_cfg.uv_v + (2U * (uint32_t)g_cfg.hys_v) + 5U);
 }
 
 /* Show a temporary status message ("Err" or "donE") for `ms` milliseconds */
@@ -137,35 +137,67 @@ void mode_settings(void)
     }
 }
 
-/* ---- Mode 3: Sensor Calibration (Steady 5 Hz Readout + Instant Key Snap) - */
+/* ---- Mode 3: Sensor Calibration (Median-3 + Steady 2 Hz Readout) --------- */
 typedef struct {
-    int32_t  ema_q5;     /* Calibration EMA accumulator in Q5 fixed-point (alpha = 1/16) */
+    uint32_t ema_q8;     /* Calibration EMA accumulator in Q8 fixed-point (alpha = 1/64) */
+    uint16_t hist[3];    /* Last 3 raw 20 ms blocks for 3-point median spike rejection */
     uint16_t shown;      /* Last value displayed on TM1637 */
-    uint32_t last_ms;    /* Timestamp of last 200 ms (5 Hz) display update */
-    bool     init;
+    uint32_t last_ms;    /* Timestamp of last 500 ms (2 Hz) display update */
+    uint8_t  count;      /* Number of raw blocks collected (0..3) */
 } CalView_t;
 
-/* Smooth raw 20 ms blocks at 5 Hz with a 2-LSB deadband for easy reading,
- * while snapping immediately (`snap = true`) whenever '+' or '-' is pressed. */
-static uint16_t cal_view_update(CalView_t *v, uint16_t sample, bool snap)
+/* Return the middle value of 3 samples to reject isolated single-cycle (20 ms) EMI spikes */
+static uint16_t median3(uint16_t a, uint16_t b, uint16_t c)
 {
-    int32_t x = (int32_t)sample * 32;
-    if (!v->init || snap) {
-        v->ema_q5  = x;
-        v->shown   = sample;
+    if (a > b) { uint16_t t = a; a = b; b = t; }
+    if (b > c) { uint16_t t = b; b = c; c = t; }
+    if (a > b) { uint16_t t = a; a = b; b = t; }
+    return b;
+}
+
+/* Reject single-block glitches with a 3-point median, smooth with alpha = 1/64 (~1.28 s tau),
+ * and refresh the display at 2 Hz (500 ms) with a 4-LSB (0.4 V / 0.04 A) hysteresis deadband. */
+static uint16_t cal_view_update(CalView_t *v, uint16_t sample)
+{
+    if (v->count < 3U) {
+        v->hist[v->count++] = sample;
+        uint16_t init_val = (v->count == 3U) ? median3(v->hist[0], v->hist[1], v->hist[2]) : sample;
+        v->ema_q8  = (uint32_t)init_val << 8;
+        v->shown   = init_val;
         v->last_ms = g_ms;
-        v->init    = true;
         return v->shown;
     }
-    v->ema_q5 += (x - v->ema_q5) / 16;
-    if ((uint32_t)(g_ms - v->last_ms) >= 200UL) {
+
+    v->hist[0] = v->hist[1];
+    v->hist[1] = v->hist[2];
+    v->hist[2] = sample;
+
+    uint16_t med  = median3(v->hist[0], v->hist[1], v->hist[2]);
+    uint32_t x_q8 = (uint32_t)med << 8;
+    if (x_q8 >= v->ema_q8) v->ema_q8 += (x_q8 - v->ema_q8 + 32U) >> 6;
+    else                   v->ema_q8 -= (v->ema_q8 - x_q8 + 32U) >> 6;
+
+    if ((uint32_t)(g_ms - v->last_ms) >= 500UL) {
         v->last_ms = g_ms;
-        uint16_t avg = (uint16_t)((v->ema_q5 + 16) / 32);
-        int32_t diff = (int32_t)avg - (int32_t)v->shown;
-        if (diff < 0) diff = -diff;
-        if (diff >= 2) v->shown = avg;
+        uint16_t avg  = (uint16_t)((v->ema_q8 + 128U) >> 8);
+        uint16_t diff = (avg >= v->shown) ? (avg - v->shown) : (v->shown - avg);
+        if (diff >= 4U) v->shown = avg;
     }
     return v->shown;
+}
+
+/* Proportionally rescale the filtered calibration state when '+' or '-' changes the gain trim,
+ * giving instant visual feedback without resetting to a noisy raw 20 ms block. */
+static void cal_view_rescale(CalView_t *v, uint16_t old_trim, uint16_t new_trim)
+{
+    if (v->count == 0U || old_trim == 0U || old_trim == new_trim) return;
+    uint32_t half = (uint32_t)old_trim >> 1;
+    v->ema_q8  = (uint32_t)(((uint64_t)v->ema_q8 * (uint64_t)new_trim + half) / (uint64_t)old_trim);
+    v->hist[0] = (uint16_t)(((uint32_t)v->hist[0] * new_trim + half) / old_trim);
+    v->hist[1] = (uint16_t)(((uint32_t)v->hist[1] * new_trim + half) / old_trim);
+    v->hist[2] = (uint16_t)(((uint32_t)v->hist[2] * new_trim + half) / old_trim);
+    v->shown   = (uint16_t)((v->ema_q8 + 128U) >> 8);
+    v->last_ms = g_ms;
 }
 
 /* Display prompt string ("C-0" or "SAVE") and wait for a clean 'OK' press */
@@ -218,19 +250,19 @@ void mode_cal(void)
     input_wait_release();
     CalView_t cv      = { 0 };
     uint32_t  last_bv = g_sens.blocks;
-    bool      snap_v  = true;
     for (;;) {
         ui_idle();
         KeyEvent_t e = input_get_event();
         if (e == KEY_EVT_PLUS || e == KEY_EVT_MINUS) {
+            uint16_t old_v = g_cfg.cal_v_q12;
             adjust_trim(&g_cfg.cal_v_q12, e);
-            snap_v = true;
+            cal_view_rescale(&cv, old_v, g_cfg.cal_v_q12);
+            if (cv.count > 0U) display_uint_pad4(cv.shown);
         }
         if (e == KEY_EVT_OK) break;
         if (g_sens.blocks != last_bv) {
             last_bv = g_sens.blocks;
-            display_uint_pad4(cal_view_update(&cv, g_sens.vac_raw_dv, snap_v));
-            snap_v = false;
+            display_uint_pad4(cal_view_update(&cv, g_sens.vac_raw_dv));
         }
     }
 
@@ -242,7 +274,6 @@ void mode_cal(void)
     bool      running = false;
     CalView_t ca      = { 0 };
     uint32_t  last_ba = g_sens.blocks;
-    bool      snap_a  = true;
     for (;;) {
         ui_idle();
         KeyEvent_t e = input_get_event();
@@ -252,11 +283,11 @@ void mode_cal(void)
                 if (fsm_voltage_ok_to_start()) {
                     fsm_relay_on();
                     running = true;
-                    ca.init = false;
-                    snap_a  = true;
+                    ca      = (CalView_t){ 0 };
                     last_ba = g_sens.blocks;
                 } else {
-                    flash_message("E-UV", 1000UL);
+                    bool ov = g_sens.vac_raw_dv > ((g_cfg.ov_v - g_cfg.hys_v) * 10U);
+                    flash_message(ov ? "E-OV" : "E-UV", 1000UL);
                 }
             }
             display_text("C-A");
@@ -273,14 +304,15 @@ void mode_cal(void)
             continue;
         }
         if (e == KEY_EVT_PLUS || e == KEY_EVT_MINUS) {
+            uint16_t old_a = g_cfg.cal_a_q12;
             adjust_trim(&g_cfg.cal_a_q12, e);
-            snap_a = true;
+            cal_view_rescale(&ca, old_a, g_cfg.cal_a_q12);
+            if (ca.count > 0U) display_labeled('A', ca.shown);
         }
         if (e == KEY_EVT_OK) { hal_relay_set(false); break; }
         if (g_sens.blocks != last_ba) {
             last_ba = g_sens.blocks;
-            display_labeled('A', cal_view_update(&ca, g_sens.i_raw_ca, snap_a));
-            snap_a = false;
+            display_labeled('A', cal_view_update(&ca, g_sens.i_raw_ca));
         }
     }
 #endif

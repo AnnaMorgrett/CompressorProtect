@@ -2,8 +2,6 @@
  * and non-blocking SysTick-driven LED (PD5) & Buzzer (PC0) patterns. */
 #include "system.h"
 
-#define KEY_ADC_PLUS_MIN 25U   /* Minimum valid ADC count for '+' button; < 25 rejects multi-key mash */
-
 typedef enum { K_NONE, K_MINUS, K_MENU, K_PLUS } KeyCode_t;
 
 static KeyEvent_t pending = KEY_EVT_NONE;            /* Single-slot event queue consumed by UI */
@@ -12,15 +10,30 @@ static uint8_t    same_count = 0;                    /* Consecutive identical sc
 static uint32_t   last_scan_ms = 0, press_ms = 0, next_repeat_ms = 0;
 static bool       long_fired = false, repeating = false;
 
-/* Convert 10-bit ADC reading on PD6 into a single key code.
- * Pressing multiple keys simultaneously pulls ADC below 25 and is safely ignored as K_NONE. */
+/* Read 8 injected ADC samples on PD6 and compute a trimmed mean (dropping min & max)
+ * so isolated 50 Hz AC or display-switching glitches cannot corrupt keypad detection. */
+static uint16_t read_key_adc(void)
+{
+    uint32_t sum  = 0;
+    uint16_t vmin = 1023U;
+    uint16_t vmax = 0U;
+    for (uint8_t i = 0; i < 8U; i++) {
+        uint16_t s = adc_read_injected(ADC_CH_KEY);
+        sum += s;
+        if (s < vmin) vmin = s;
+        if (s > vmax) vmax = s;
+    }
+    return (uint16_t)((sum - vmin - vmax + 3U) / 6U);
+}
+
+/* Convert 10-bit ADC reading on PD6 (10k pull-up) into a single key code:
+ * No key >= 720, '-' (4.7k) = 255..719, 'OK' (2.2k) = 115..254, '+' (0..1k) = 0..114. */
 static KeyCode_t decode_key(uint16_t adc)
 {
     if (adc >= KEY_ADC_NONE_MIN)  return K_NONE;
     if (adc >= KEY_ADC_MINUS_MIN) return K_MINUS;
     if (adc >= KEY_ADC_MENU_MIN)  return K_MENU;
-    if (adc >= KEY_ADC_PLUS_MIN)  return K_PLUS;
-    return K_NONE;
+    return K_PLUS;
 }
 
 /* Handle a debounced transition into a new key state */
@@ -46,6 +59,7 @@ void input_init(void)
 {
     pending = KEY_EVT_NONE;
     stable = candidate = K_NONE;
+    same_count = 0U;
 }
 
 /* Poll keypad every 5 ms: handles 10 ms debouncing, 3 s long-press, and 12.5 Hz auto-repeat */
@@ -54,16 +68,20 @@ void input_poll(void)
     if ((uint32_t)(g_ms - last_scan_ms) < KEY_SCAN_MS) return;
     last_scan_ms = g_ms;
 
-    KeyCode_t raw = decode_key(adc_read_injected(ADC_CH_KEY));
-    if (raw != candidate) {
+    KeyCode_t raw = decode_key(read_key_adc());
+    if (raw == stable) {
+        candidate  = stable;
+        same_count = 0U;
+    } else if (raw == candidate) {
+        if (same_count < KEY_DEBOUNCE_SCANS) {
+            same_count++;
+            if (same_count == KEY_DEBOUNCE_SCANS) {
+                on_key_change(candidate);
+            }
+        }
+    } else {
         candidate  = raw;
-        same_count = 0;
-    } else if (same_count < 255U) {
-        same_count++;
-    }
-
-    if (same_count == KEY_DEBOUNCE_SCANS && candidate != stable) {
-        on_key_change(candidate);
+        same_count = 1U;
     }
 
     /* Fire KEY_EVT_OK_LONG once after 'OK' is held continuously for 3.0 seconds */
@@ -91,13 +109,15 @@ KeyEvent_t input_get_event(void)
 /* Returns true when '-' or '+' is currently auto-repeating (used to accelerate CAL trim steps) */
 bool input_is_repeating(void) { return repeating; }
 
-/* Block until all buttons are released so a held key never leaks into the next menu screen */
+/* Block until all buttons are released (with 1.5 s EMI safety bound) so held keys do not leak */
 void input_wait_release(void)
 {
-    do {
+    uint32_t t0 = g_ms;
+    while ((uint32_t)(g_ms - t0) < 1500UL) {
         hal_wdg_kick();
         input_poll();
-    } while (stable != K_NONE || decode_key(adc_read_injected(ADC_CH_KEY)) != K_NONE);
+        if (stable == K_NONE && decode_key(read_key_adc()) == K_NONE) break;
+    }
     pending = KEY_EVT_NONE;
 }
 
@@ -107,7 +127,7 @@ bool input_menu_held_at_boot(void)
     for (uint8_t i = 0; i < 5U; i++) {
         Delay_Ms(10);
         hal_wdg_kick();
-        if (decode_key(adc_read_injected(ADC_CH_KEY)) != K_MENU) return false;
+        if (decode_key(read_key_adc()) != K_MENU) return false;
     }
     return true;
 }

@@ -39,8 +39,8 @@ typedef struct {
     volatile uint16_t i_raw_ca;      /* Unfiltered 20 ms RMS current in 0.01 A (used for fast trips) */
     volatile uint16_t i_disp_ca;     /* EMA + deadband smoothed current in 0.01 A (used for RUN UI)  */
     volatile uint16_t i_avg_ca;      /* EMA-only current in 0.01 A (no deadband)                     */
-    volatile uint16_t vac_rms_q6;    /* Raw AC RMS voltage in ADC counts x 64 (before zero/gain)     */
-    volatile uint16_t ct_rms_q6;     /* Raw AC RMS current in ADC counts x 64 (before zero/gain)     */
+    volatile uint16_t vac_rms_q6;    /* Raw 20 ms AC RMS voltage in ADC counts x 64 (before zero/gain)*/
+    volatile uint16_t ct_rms_q6;     /* Raw 20 ms AC RMS current in ADC counts x 64 (before zero/gain)*/
     volatile uint16_t vdd_mv;        /* Measured MCU supply voltage in mV (via internal 1.2V VREF)   */
     volatile uint32_t blocks;        /* Counter incremented every valid 20 ms AC cycle processed     */
 } SensorData_t;
@@ -110,7 +110,7 @@ void     adc_init(void);
 void     adc_start(void);
 void     adc_service(void);                  /* Refreshes real VDD using VREFINT every 500 ms */
 uint16_t adc_read_injected(uint8_t channel); /* Reads KEY or VREFINT safely between TIM1 triggers */
-uint16_t adc_measure_noise_q6(uint8_t which);/* Averages 2 AC cycles (40 ms) for zero-point cal */
+uint16_t adc_measure_noise_q6(uint8_t which);/* Averages RMS_AVG_BLOCKS cycles (80 ms) for zero cal */
 
 /* [#06] display_tm1637.c - 4-digit 7-segment LED driver */
 void     display_init(void);

@@ -1,7 +1,7 @@
 /* [#05] adc_dsp.c - Hardware-timed 6400 Hz ADC acquisition + True-RMS Digital Signal Processing.
  * Pipeline: TIM1 TRGO (6400 Hz) -> ADC1 Scan (VAC, CT) -> Circular DMA1 Ping-Pong Buffer.
- * Every 20 ms (128 samples = 1 full 50 Hz cycle), DMA fires an interrupt to compute True RMS,
- * run instant fault protection (fsm_on_block), and update smoothed display values. */
+ * Every 20 ms (128 samples = 1 full 50 Hz cycle), DMA fires an interrupt to compute single-cycle
+ * True RMS, run instant 20 ms fault protection (fsm_on_block), and update smoothed UI values. */
 #include "system.h"
 
 #define BUF_HALF_WORDS     (SAMPLES_PER_BLOCK * ADC_NCH) /* 128 * 2 = 256 half-words per 20 ms half-buffer */
@@ -25,10 +25,6 @@ static uint8_t warmup = ADC_WARMUP_BLOCKS; /* Counter to discard initial DC-bias
 /* Display smoothing filter state (EMA in Q4 fixed-point + Schmitt deadband) */
 typedef struct { int32_t ema_q4; uint16_t shown; bool init; } Filter_t;
 static Filter_t filt_v, filt_a;
-
-/* Sliding ring buffer storing the last RMS_AVG_BLOCKS (4) mean-square cycle values */
-static uint32_t ring_v[RMS_AVG_BLOCKS], ring_a[RMS_AVG_BLOCKS];
-static uint8_t  ring_idx, ring_fill;
 
 /* Fast 32-bit integer square root (bit-by-bit restoring algorithm, ~16 iterations, no division) */
 static uint32_t isqrt32(uint32_t n)
@@ -57,16 +53,6 @@ static uint32_t block_ms_q12(const volatile uint16_t *blk, uint8_t offset)
     /* Since N = 128, N^2 = 16384. Dividing by 4 (>> 2) scales variance by 4096 (Q12). */
     uint64_t num = (uint64_t)sumsq * SAMPLES_PER_BLOCK - (uint64_t)sum * sum;
     return (uint32_t)(num >> 2);
-}
-
-/* Push newest 20 ms mean-square power into sliding window, average power, and take square root.
- * Returns True RMS in Q6 fixed-point (= ADC RMS counts * 64). */
-static uint32_t avg_rms_q6(uint32_t *ring, uint32_t newest, uint8_t idx, uint8_t fill)
-{
-    ring[idx] = newest;
-    uint64_t sum = 0;
-    for (uint8_t i = 0; i < fill; i++) sum += ring[i];
-    return isqrt32((uint32_t)(sum / fill));
 }
 
 /* Convert raw ADC RMS (Q6) into physical units (0.1 V or 0.01 A):
@@ -116,24 +102,24 @@ static void process_block(const volatile uint16_t *blk)
     /* Discard first 5 blocks (100 ms) after boot while mid-rail coupling capacitors charge */
     if (warmup) { warmup--; return; }
 
-    if (ring_fill < RMS_AVG_BLOCKS) ring_fill++;
-    uint32_t v_q6 = avg_rms_q6(ring_v, block_ms_q12(blk, 0), ring_idx, ring_fill);
+    /* Single-cycle (20 ms, 128-sample) True-RMS in Q6 fixed-point (= ADC RMS counts * 64).
+     * Decoupled from multi-block averaging so fault protection responds within 1 AC cycle (REQ-05). */
+    uint32_t v_q6 = isqrt32(block_ms_q12(blk, 0));
     g_sens.vac_rms_q6 = (uint16_t)v_q6;
     g_sens.vac_raw_dv = to_units(v_q6, g_cfg.zero_v_q6, g_cfg.cal_v_q12, DEF_GAIN_V_Q8);
 
 #if ENABLE_CT
-    uint32_t a_q6 = avg_rms_q6(ring_a, block_ms_q12(blk, 1), ring_idx, ring_fill);
+    uint32_t a_q6 = isqrt32(block_ms_q12(blk, 1));
     g_sens.ct_rms_q6 = (uint16_t)a_q6;
     g_sens.i_raw_ca  = to_units(a_q6, g_cfg.zero_a_q6, g_cfg.cal_a_q12, DEF_GAIN_A_Q8);
 #endif
 
-    ring_idx = (uint8_t)((ring_idx + 1U) % RMS_AVG_BLOCKS);
     g_sens.blocks++;
 
-    /* 1. FAST PATH: Check OV, UV, Inrush, and OC thresholds immediately (20 ms response) */
+    /* 1. FAST PATH: Check OV, UV, Inrush, and OC thresholds immediately (20 ms single-cycle response) */
     fsm_on_block(&g_sens);
 
-    /* 2. STABLE PATH: Update smoothed display numbers without slowing down fault trips */
+    /* 2. STABLE PATH: Update smoothed display numbers from decoupled 20 ms RMS (REQ-16) */
     g_sens.vac_disp_dv = filter_update(&filt_v, g_sens.vac_raw_dv, V_SNAP_DV, V_DEAD_DV, &g_sens.vac_avg_dv);
 #if ENABLE_CT
     g_sens.i_disp_ca   = filter_update(&filt_a, g_sens.i_raw_ca, A_SNAP_CA, A_DEAD_CA, &g_sens.i_avg_ca);
@@ -263,14 +249,14 @@ void adc_service(void)
     }
 }
 
-/* Measure zero-input baseline noise across 2 full AC blocks (40 ms) during C-0 calibration */
+/* Measure zero-input baseline noise across RMS_AVG_BLOCKS AC cycles (80 ms) during C-0 calibration */
 uint16_t adc_measure_noise_q6(uint8_t which)
 {
     uint32_t acc = 0;
-    for (uint8_t n = 0; n < 2U; n++) {
+    for (uint8_t n = 0; n < RMS_AVG_BLOCKS; n++) {
         uint32_t b = g_sens.blocks;
         while (g_sens.blocks == b) hal_wdg_kick(); /* Wait for next fresh 20 ms DMA block */
         acc += (which == ADC_CH_CT) ? g_sens.ct_rms_q6 : g_sens.vac_rms_q6;
     }
-    return (uint16_t)(acc / 2U);
+    return (uint16_t)(acc / RMS_AVG_BLOCKS);
 }
