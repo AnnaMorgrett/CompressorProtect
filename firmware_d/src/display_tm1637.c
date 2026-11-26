@@ -1,3 +1,9 @@
+/* ============================ BEGINNER GUIDE: display_tm1637.c ============================
+ * WHAT THIS FILE IS: the driver for the 4-digit red LED display (TM1637 chip on a small module).
+ * Other files just say display_text("E-UV") or display_uint(220); this file turns that into
+ * the right segments and the right wire signals.
+ * ============================================================================================ */
+
 /* [#06] display_tm1637.c - Bit-banged 2-wire driver for TM1637 4-digit 7-segment LED module.
  * Pins: PC4 = CLK, PC3 = DIO. Only sends I2C-like frames when digits actually change
  * (plus a 500 ms background refresh to recover automatically from electrical noise). */
@@ -8,18 +14,25 @@
 #define TM_CMD_ADDR0        0xC0U   /* TM1637 address command: start at leftmost digit (0xC0) */
 #define TM_CMD_DISPLAY_ON   0x88U   /* TM1637 display control: turn display ON (OR with 0..7 dim) */
 
+/* TWO COPIES TRICK: "buf" = what we WANT to show, "shown" = what the display currently shows.
+ * We only talk to the display when they differ (saves time and avoids flicker). Each digit is a byte:
+ * one bit per segment (a,b,c,d,e,f,g,dot). Example: 0x06 lights segments b+c = the digit "1". */
 static uint8_t buf[4];                                    /* Desired 7-segment bitmasks for digits 0..3 */
 static uint8_t shown[4] = { 0xFFU, 0xFFU, 0xFFU, 0xFFU }; /* Last bitmasks actually sent to TM1637 */
 static uint32_t last_refresh = 0;
 
 /* Bit-bang clock and data helpers with 5 us setup/hold timing (~100 kHz bus speed) */
+/* "Bit-banging" = we wave two wires (CLK and DIO) up and down by hand in software to talk to the TM1637 chip,
+ * with 5 microsecond pauses. It looks like I2C but is NOT real I2C. */
 static void clk(uint8_t v) { funDigitalWrite(PIN_TM_CLK, v); Delay_Us(5); }
 static void dio(uint8_t v) { funDigitalWrite(PIN_TM_DIO, v); Delay_Us(5); }
 
+/* START and STOP are special wire patterns the TM1637 recognises as "message begins / message ends". */
 static void tm_start(void) { dio(1); clk(1); dio(0); clk(0); }
 static void tm_stop(void)  { clk(0); dio(0); clk(1); dio(1); }
 
 /* Shift out 1 byte LSB-first and clock through the 9th ACK bit */
+/* Send one byte: 8 bits, one per clock pulse (least significant bit first), then one extra clock for the "ACK". */
 static void tm_write(uint8_t b)
 {
     for (uint8_t i = 0; i < 8U; i++) {
@@ -36,6 +49,7 @@ static void tm_write(uint8_t b)
 }
 
 /* Map ASCII digits and status letters ('A', 'C', 'E', 'L', 'O', 'P', 'S', 'U', etc.) to 7-seg bits */
+/* Look-up table: character -> which segments to light. Add new letters here if you need them. */
 static uint8_t seg_for(char c)
 {
     static const uint8_t digits[10] = {
@@ -62,6 +76,7 @@ void display_init(void)
 }
 
 /* Render up to 4 characters into display buffer (pads shorter strings with blank spaces) */
+/* The display_xxx() functions only FILL the buffer. Nothing is sent until display_flush() runs. */
 void display_text(const char *s)
 {
     for (uint8_t i = 0; i < 4U; i++) {
@@ -70,6 +85,7 @@ void display_text(const char *s)
 }
 
 /* Render right-aligned unsigned integer with leading spaces (e.g. 220 -> " 220", 5 -> "   5") */
+/* Split a number into digits with "% 10" (last digit) and "/ 10" (remove last digit). */
 void display_uint(uint16_t v)
 {
     if (v > 9999U) v = 9999U;
@@ -113,6 +129,7 @@ void display_mmss(uint16_t seconds)
 }
 
 /* Transmit buffer to TM1637 only when digits change or every 500 ms for glitch recovery */
+/* Send the buffer to the display ONLY when something changed (or every 500 ms to heal any electrical glitch). */
 void display_flush(void)
 {
     bool changed = false;

@@ -1,9 +1,19 @@
+/* ============================ BEGINNER GUIDE: input_alerts.c ============================
+ * WHAT THIS FILE IS: everything the USER touches or notices (except the 4-digit display):
+ *   INPUT  : 3 buttons (-, OK, +) on a single analog pin, plus the CAL jumper.
+ *   ALERTS : the status LED and the buzzer (non-blocking patterns played by the 1 ms interrupt).
+ * ========================================================================================= */
+
 /* [#07] input_alerts.c - 3-key resistor-ladder scanner (PD6), CAL jumper reader (PC6),
  * and non-blocking SysTick-driven LED (PD5) & Buzzer (PC0) patterns. */
 #include "system.h"
 
+/* Which physical button is currently detected. */
 typedef enum { K_NONE, K_MINUS, K_MENU, K_PLUS } KeyCode_t;
 
+/* A button press becomes an "event" waiting in this one-item mailbox until another file picks it up
+ * with input_get_event(). "Debounce" = ignore the tiny electrical bounce when a button is pressed:
+ * we only believe a new button state after it was seen twice in a row (10 ms). */
 static KeyEvent_t pending = KEY_EVT_NONE;            /* Single-slot event queue consumed by UI */
 static KeyCode_t  stable = K_NONE, candidate = K_NONE; /* Debounced key state & raw candidate */
 static uint8_t    same_count = 0;                    /* Consecutive identical scans counter */
@@ -12,6 +22,8 @@ static bool       long_fired = false, repeating = false;
 
 /* Read 8 injected ADC samples on PD6 and compute a trimmed mean (dropping min & max)
  * so isolated 50 Hz AC or display-switching glitches cannot corrupt keypad detection. */
+/* Read the button pin 8 times, throw away the highest and lowest, average the other 6.
+ * This ignores single electrical spikes so a ghost button press cannot happen. */
 static uint16_t read_key_adc(void)
 {
     uint32_t sum  = 0;
@@ -28,6 +40,7 @@ static uint16_t read_key_adc(void)
 
 /* Convert 10-bit ADC reading on PD6 (10k pull-up) into a single key code:
  * No key >= 720, '-' (4.7k) = 255..719, 'OK' (2.2k) = 115..254, '+' (0..1k) = 0..114. */
+/* Number -> button. The 3 buttons form a voltage divider with different resistors, so each gives a different number. */
 static KeyCode_t decode_key(uint16_t adc)
 {
     if (adc >= KEY_ADC_NONE_MIN)  return K_NONE;
@@ -37,6 +50,7 @@ static KeyCode_t decode_key(uint16_t adc)
 }
 
 /* Handle a debounced transition into a new key state */
+/* A button was just pressed or released (after debouncing). Create the matching event. */
 static void on_key_change(KeyCode_t now)
 {
     stable    = now;
@@ -63,6 +77,8 @@ void input_init(void)
 }
 
 /* Poll keypad every 5 ms: handles 10 ms debouncing, 3 s long-press, and 12.5 Hz auto-repeat */
+/* Call this often from the main loop. It checks the buttons every 5 ms, does the debounce, notices a 3-second
+ * long press on OK, and makes + / - repeat quickly while held. */
 void input_poll(void)
 {
     if ((uint32_t)(g_ms - last_scan_ms) < KEY_SCAN_MS) return;
@@ -99,6 +115,7 @@ void input_poll(void)
 }
 
 /* Read and clear the latest button event */
+/* Take the waiting event out of the mailbox (and empty it). Returns KEY_EVT_NONE if nothing happened. */
 KeyEvent_t input_get_event(void)
 {
     KeyEvent_t e = pending;
@@ -122,6 +139,7 @@ void input_wait_release(void)
 }
 
 /* Check at power-up if 'OK' (Menu) is held down for 50 ms to enter Mode 2 Settings ("Sett") */
+/* At power-on: is the OK button being held? (Checked 5 times over 50 ms so a bounce does not count.) */
 bool input_menu_held_at_boot(void)
 {
     for (uint8_t i = 0; i < 5U; i++) {
@@ -133,6 +151,7 @@ bool input_menu_held_at_boot(void)
 }
 
 /* Check at power-up if CAL pin (PC6 / H1 pin 3) is shorted to GND for 10 ms to enter Mode 3 CAL */
+/* At power-on: is the CAL jumper shorted to ground? (Pin reads LOW.) */
 bool input_cal_active(void)
 {
     for (uint8_t i = 0; i < 5U; i++) {
@@ -142,6 +161,8 @@ bool input_cal_active(void)
     return true;
 }
 
+/* LED and buzzer are driven from the 1 ms interrupt as tiny "sequencers", so the main program never has to wait
+ * for a beep to finish ("non-blocking"). Ask for a pattern with alerts_set_led() / alerts_beep() and forget it. */
 /* ---- Non-Blocking Status LED & Active Buzzer Sequencer (1 ms SysTick) --- */
 static volatile LedMode_t led_mode = LED_OFF;
 static volatile struct {
@@ -155,6 +176,7 @@ static uint16_t ph1000 = 0, ph250 = 0;   /* LED phase counters: no software divi
 void alerts_set_led(LedMode_t m) { led_mode = m; }
 
 /* Queue a buzzer alert pattern without blocking CPU execution */
+/* Start a beep pattern: n beeps, each "on" ms loud then "off" ms quiet. The interrupt plays it in the background. */
 void alerts_beep(BeepPattern_t p)
 {
     uint8_t n = 0; uint16_t on = 0, off = 0;
@@ -171,6 +193,8 @@ void alerts_beep(BeepPattern_t p)
 }
 
 /* Called every 1 ms from SysTick_Handler to step buzzer pulses and blink status LED */
+/* Called by the 1 ms interrupt. Part 1: step the buzzer pattern. Part 2: decide if the LED is on or off.
+ * We use small counters (ph1000, ph250) instead of "%" because this chip has no hardware divide (slow). */
 void alerts_tick_1ms(void)
 {
     if (beep.count) {

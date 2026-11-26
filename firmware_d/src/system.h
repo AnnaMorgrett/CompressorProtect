@@ -1,3 +1,9 @@
+/* ============================ BEGINNER GUIDE: system.h ============================
+ * WHAT THIS FILE IS: the shared "contract" between all .c files. It declares the common data boxes
+ * (settings, measurements), the named choices (faults, key events, LED patterns) and the list of functions each
+ * file offers. Every .c file starts with  #include "system.h"  so they all agree on the same names.
+ * ================================================================================== */
+
 /* [#02] system.h - Shared data structures, enums, global state, and module APIs. */
 #ifndef SYSTEM_H
 #define SYSTEM_H
@@ -7,6 +13,8 @@
 
 /* Persistent configuration stored in the top 64-byte Flash page (0x08003FC0).
  * Must be exactly 64 bytes so one fast-page erase/write commits the entire struct. */
+/* A "struct" is a labelled box holding several related numbers. This one is the user's SETTINGS NOTEBOOK.
+ * It is saved to Flash as one 64-byte page. "uint16_t" = a whole number 0..65535. */
 typedef struct __attribute__((aligned(4))) {
     uint16_t ov_v;        /* P01: Over-voltage trip limit (Volts)                       */
     uint16_t uv_v;        /* P02: Under-voltage trip limit (Volts)                      */
@@ -33,6 +41,8 @@ _Static_assert(sizeof(SystemConfig_t) == 64, "SystemConfig_t must fill one 64-by
 
 /* Live sensor telemetry updated every 20 ms inside the DMA1 Channel 1 interrupt.
  * Marked volatile because values are written in ISR context and read in main(). */
+/* A second box: the LATEST MEASUREMENTS. "volatile" means "this can change at any moment behind your back"
+ * (because an interrupt updates it), so the compiler must always re-read it instead of remembering an old value. */
 typedef struct {
     volatile uint16_t vac_raw_dv;    /* Unfiltered 20 ms RMS voltage in 0.1 V (used for fast trips)  */
     volatile uint16_t vac_disp_dv;   /* EMA + deadband smoothed voltage in 0.1 V (used for RUN UI)   */
@@ -48,6 +58,7 @@ typedef struct {
     volatile uint32_t blocks;        /* Counter incremented every valid 20 ms AC cycle processed     */
 } SensorData_t;
 
+/* An "enum" is a list of named choices. The computer stores them as numbers 0,1,2... but we read the names. */
 /* Fault codes displayed on screen and used to log trips */
 typedef enum {
     FAULT_NONE = 0,   /* Normal / no active fault */
@@ -92,10 +103,12 @@ typedef enum {
 } BeepPattern_t;
 
 /* Global state shared across modules */
+/* "extern" = "this variable exists in another file; here is how to use it". */
 extern SystemConfig_t g_cfg;
 extern SensorData_t   g_sens;
 extern volatile uint32_t g_ms;   /* Free-running 1 ms uptime counter */
 
+/* Everything below is a LIST OF FUNCTIONS that other files may call (a menu of what each module offers). */
 /* [#03] hal_sys.c - Hardware abstraction, GPIO, SysTick, Watchdog */
 void     hal_init(void);
 void     hal_wdg_kick(void);   /* Feeds IWDG ONLY while the ADC/DMA/DSP chain is alive */

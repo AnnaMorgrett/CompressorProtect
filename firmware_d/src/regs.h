@@ -1,3 +1,11 @@
+/* ============================ BEGINNER GUIDE: regs.h ============================
+ * WHAT THIS FILE IS: a dictionary. The chip is controlled by writing numbers into special memory
+ * locations called REGISTERS. Each register is a row of switches (bits). Writing "1UL << 15" means
+ * "flip switch number 15". Instead of scattering such mystery numbers around the code, every one of them
+ * is given a readable name here (REG_...) with a comment saying what it does.
+ * You normally never need to edit this file. The numbers come from the CH32V003 datasheet.
+ * ================================================================================ */
+
 /* [#00] regs.h - Every raw register bit / magic number used by the firmware, with a name and a comment.
  * Rule: no unexplained "1UL << 15" or "0x804" anywhere else. Values are from the CH32V003 datasheet /
  * reference manual and the ch32fun notes. Names are prefixed REG_ so they can never clash with ch32fun. */
@@ -9,6 +17,7 @@
 /* ---- CPU: interrupt system control ---------------------------------------- */
 /* INTSYSCR is CSR 0x804. Value 0 = HPE (hardware stacking) and hardware nesting OFF, so GCC's normal
  * interrupt prologue saves every register (ch32fun notes: HPE does not preserve s0/s1). */
+/* "inline" = the compiler pastes these few lines wherever the function is used (no call overhead). */
 static inline void cpu_hpe_off(void)
 {
     __asm__ volatile("csrw 0x804, %0" : : "r"(0));

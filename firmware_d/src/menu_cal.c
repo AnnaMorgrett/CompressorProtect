@@ -1,10 +1,20 @@
+/* ============================ BEGINNER GUIDE: menu_cal.c ============================
+ * WHAT THIS FILE IS: the two "service" modes you reach by holding something at power-on.
+ *   MODE 2 "Sett"  : change the protection limits (P01..P09).
+ *   MODE 3 "C-0 / C-V / C-A" : calibration - teach the chip the TRUE volts and amps.
+ * Both modes keep the relay OFF (except while you test the load in C-A) and finish on "donE".
+ * ====================================================================================== */
+
 /* [#09] menu_cal.c - Mode 2 Settings Menu ("Sett") and Mode 3 Sensor Calibration ("C-0", "C-V", "C-A").
  * Both modes keep the compressor relay OFF (except when user explicitly enables load in C-A)
  * and end in "donE" halt state requiring a clean power cycle. */
 #include "system.h"
 
+/* Safety check for calibration step C-0: if the "zero" reading is bigger than this, mains is probably still connected. */
 #define CAL_ZERO_MAX_Q6 300U   /* ~4.7 ADC RMS counts: reject C-0 if live 220V AC is still plugged in */
 
+/* The menu is TABLE DRIVEN: each row of k_params (below) describes one setting: code, which variable, min, max, step,
+ * and how to show it. To add a new setting you only add one row - the menu code does not change. */
 typedef enum { FMT_UINT, FMT_MINUTES, FMT_AMPS } ParamFmt_t;
 typedef struct {
     const char *code;          /* 3-char parameter code shown in Level 1 ("P01".."P09") */
@@ -13,6 +23,7 @@ typedef struct {
     ParamFmt_t  fmt;           /* Display formatter for Level 2 editing */
 } Param_t;
 
+/* Allowed ranges protect you from typing dangerous values (for example an over-voltage limit of 400 V). */
 static const Param_t k_params[] = {
     { "P01", &g_cfg.ov_v,      230U, 270U,  1U, FMT_UINT    }, /* Over-voltage trip (V) */
     { "P02", &g_cfg.uv_v,      140U, 210U,  1U, FMT_UINT    }, /* Under-voltage trip (V) */
@@ -30,6 +41,8 @@ static const Param_t k_params[] = {
 #define ITEM_TOTAL (N_PARAMS + 2U)
 
 /* Service background tasks (watchdog, VDD measurement, keypad, display) inside blocking UI loops */
+/* While a menu waits for you, these background jobs must keep running: feed the watchdog, refresh the supply
+ * measurement, scan buttons, update the display. Every waiting loop in this file calls ui_idle(). */
 static void ui_idle(void)
 {
     hal_wdg_kick();
@@ -39,6 +52,7 @@ static void ui_idle(void)
 }
 
 /* Safe terminal state after SAVE: relay forced OFF, LED OFF, displays "donE" until unplugged */
+/* End of Settings/Calibration: relay OFF forever, display shows "donE". Unplug and re-plug power to continue. */
 static void halt_done(void)
 {
     hal_relay_set(false);
@@ -61,6 +75,7 @@ static void show_param_value(const Param_t *p)
 }
 
 /* Validate that OV - HYS is at least 5 V higher than UV + HYS so a valid start window exists */
+/* Reject silly combinations: UV and OV limits must leave a usable start window between them. */
 static bool window_ok(void)
 {
     return (uint32_t)g_cfg.ov_v > ((uint32_t)g_cfg.uv_v + (2U * (uint32_t)g_cfg.hys_v) + 5U);
@@ -77,6 +92,9 @@ static void flash_message(const char *s, uint32_t ms)
 /* ---- Mode 2: 2-Level Settings Menu ---------------------------------------
  * Level 1: Browse P01..P09 <-> SAVE <-> rSt using '+' and '-' (clamped at ends).
  * Level 2: Press OK on P01..P09 to edit value with '+' and '-', press OK again to return. */
+/* HOW TO USE THE SETTINGS MENU:  hold OK while powering on -> "Sett" -> press OK -> use + / - to pick P01..P09, SAVE, rSt.
+ *   - On a parameter, press OK to edit its value with + / -, press OK again to go back.
+ *   - On SAVE press OK to store everything (shows "donE").  On rSt press OK to restore factory values. */
 void mode_settings(void)
 {
     hal_relay_set(false);
@@ -137,6 +155,7 @@ void mode_settings(void)
     }
 }
 
+/* Calibration display helper: shows a steady number even though the live reading wobbles. */
 /* ---- Mode 3: Sensor Calibration (Median-3 + Steady 2 Hz Readout) --------- */
 typedef struct {
     uint32_t ema_q8;     /* Calibration EMA accumulator in Q8 fixed-point (alpha = 1/64) */
@@ -147,6 +166,7 @@ typedef struct {
 } CalView_t;
 
 /* Return the middle value of 3 samples to reject isolated single-cycle (20 ms) EMI spikes */
+/* "Median of 3" = sort three numbers and take the middle one. Throws away a single wild reading. */
 static uint16_t median3(uint16_t a, uint16_t b, uint16_t c)
 {
     if (a > b) { uint16_t t = a; a = b; b = t; }
@@ -157,6 +177,7 @@ static uint16_t median3(uint16_t a, uint16_t b, uint16_t c)
 
 /* Reject single-block glitches with a 3-point median, smooth with alpha = 1/64 (~1.28 s tau),
  * and refresh the display at 2 Hz (500 ms) with a 4-LSB (0.4 V / 0.04 A) hysteresis deadband. */
+/* Make the calibration number calm: median of 3, then slow smoothing, then update the screen only twice a second. */
 static uint16_t cal_view_update(CalView_t *v, uint16_t sample)
 {
     if (v->count < 3U) {
@@ -209,6 +230,8 @@ static void wait_ok(const char *label)
 }
 
 /* Adjust Q12 calibration multiplier: fine step (2) on single tap, coarse step (24) when held */
+/* The "trim" is a multiplier (4096 = 1.0000x). + / - nudge it so the displayed number matches a reference meter.
+ * Tap = tiny step, hold = big step. */
 static void adjust_trim(uint16_t *trim_q12, KeyEvent_t e)
 {
     int32_t step = input_is_repeating() ? 24 : 2;
@@ -218,6 +241,13 @@ static void adjust_trim(uint16_t *trim_q12, KeyEvent_t e)
     *trim_q12 = (uint16_t)nv;
 }
 
+/* HOW TO CALIBRATE (do this once per board, with a trusted multimeter):
+ *   1) Short the CAL jumper (PC6 to GND) and power on.
+ *   2) "C-0": disconnect mains and load, press OK. The chip measures its own zero/noise level.
+ *   3) "C-V": connect mains. Press + / - until the display equals your multimeter (e.g. 2205 = 220.5 V). Press OK.
+ *   4) "C-A": press OK to switch the relay on with your load, press + / - until it matches a clamp meter (A140 = 1.40 A). OK again.
+ *      (Press + instead to skip current calibration.)
+ *   5) "SAVE": press OK. Everything is stored in Flash. Remove the jumper and power-cycle. */
 void mode_cal(void)
 {
     hal_relay_set(false);

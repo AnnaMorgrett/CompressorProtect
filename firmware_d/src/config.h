@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* A "feature switch" is a number you can change: 1 = ON, 0 = OFF. The code listens to these at build time. */
 /* ---- Feature Switches --------------------------------------------------- */
 #define ENABLE_CT 1       /* 1 = Enable ZHT103 current transformer sensing on PA1 */
 #define ENABLE_NTC 0      /* 0 = Disabled: NTC1/NTC2 headers sit on PC2/PC1 (no ADC hardware) */
@@ -21,6 +22,9 @@
 #error "NTC pins PC1/PC2 have no ADC channel on the CH32V003A4M6. Rewire first."
 #endif
 
+/* PIN MAP: every PIN_xxx below is a nickname for one physical leg of the chip, matching your PCB.
+ * If you ever move a wire on the board, change the nickname here and nowhere else.
+ * (Names like PC3, PD4 mean "Port C pin 3", "Port D pin 4" - the chip's own naming.) */
 /* ---- EasyEDA V1.0 SOP16 Pin Map ----------------------------------------- */
 #define PIN_BUZZER PC0 /* Active-high NPN driver (Q1 S8050) for piezo buzzer         */
 #define PIN_TM_DIO PC3 /* TM1637 4-digit LED display Data I/O line (push-pull)       */
@@ -33,6 +37,8 @@
 #define PIN_CT PA1     /* Analog ADC1: Compressor current sense from ZHT103 CT       */
 /* Note: Unused header pins PC1, PC2, and PC7 are configured as internal pull-up inputs.   */
 
+/* The ADC (Analog-to-Digital Converter) turns a voltage on a pin into a number 0..1023.
+ * The chip has several ADC "channels"; each pin has a fixed channel (see the datasheet pin table). */
 /* ---- ADC Channel Numbers (CH32V003 Hardware Mapping) -------------------- */
 #define ADC_CH_VAC 0  /* PA2 -> ADC Channel 0 */
 #define ADC_CH_CT 1   /* PA1 -> ADC Channel 1 */
@@ -47,6 +53,8 @@
 
 /* ---- System Clock, Sampling & Watchdog Timing --------------------------- */
 #define SYSCLK_HZ ((uint32_t)FUNCONF_SYSTEM_CORE_CLOCK) /* Taken from funconfig.h so code and clock can never disagree */
+/* WHY 6400? The mains swings up/down 50 times per second. 6400 / 50 = 128 snapshots per wave.
+ * 128 is a power of two, which makes the math fast for a small chip with no divide instruction. */
 #define SAMPLE_RATE_HZ 6400UL                  /* 6400 Hz per channel = 128 samples per 50 Hz AC cycle */
 #define SAMPLES_PER_BLOCK 128U                 /* 128 samples @ 6400 Hz = exactly 20 ms (1 AC cycle)   */
 #define WIN_BLOCKS 4U                          /* Accuracy window: 4 cycles (80 ms) - cuts HSI/mains-frequency leakage ~4x */
@@ -61,6 +69,9 @@ _Static_assert(FUNCONF_SYSTEM_CORE_CLOCK == 48000000UL, "funconfig.h must select
 _Static_assert((FUNCONF_SYSTEM_CORE_CLOCK % SAMPLE_RATE_HZ) == 0UL, "TIM1 period must be an integer");
 _Static_assert(SAMPLES_PER_BLOCK == 128U && WIN_BLOCKS == 4U, "adc_dsp.c shifts assume 128 samples x 4 blocks");
 
+/* "Front end" = the small circuit between the dangerous mains and the chip pin.
+ * It shrinks 220 V down to a few millivolts. The code needs to know HOW MUCH it shrinks, so these
+ * resistor values must match what is physically soldered on your board. */
 /* ---- Analog Front-End Hardware Values (Sets Nominal Uncalibrated Gain) --
  * VAC divider (EasyEDA V1.0 BOM): Mains -> R14 (820 kOhm) -> ZMPT101B (1:1) -> Burden R8 (100 Ohm) -> PA2.
  * Note (REQ-06): Do NOT change FE_R14_OHM / FE_R8_OHM until physical PCB resistors are reworked
@@ -72,12 +83,16 @@ _Static_assert(SAMPLES_PER_BLOCK == 128U && WIN_BLOCKS == 4U, "adc_dsp.c shifts 
 #define FE_R2_OHM 100UL     /* ZHT103 secondary burden resistor (Ohms) */
 #define RMS_AVG_BLOCKS 4U   /* Number of 20 ms AC cycles averaged during C-0 zero-floor capture */
 
+/* "Q8 fixed point" in plain words: the chip is slow with decimals (1.5), so we store 1.5 as 1.5 x 256 = 384
+ * and remember to divide by 256 later. Same trick: "Q12" = x4096, "Q6" = x64. */
 /* Nominal conversion gains in Q8 fixed-point (multiply by 256 for integer precision):
  * - DEF_GAIN_V_Q8 converts pin mV RMS -> 0.1 V units (decivolts, dV)
  * - DEF_GAIN_A_Q8 converts pin mV RMS -> 0.01 A units (centiamps, cA) */
 #define DEF_GAIN_V_Q8 ((256UL * FE_R14_OHM) / (FE_R8_OHM * 100UL))
 #define DEF_GAIN_A_Q8 ((256UL * FE_CT_RATIO) / (FE_R2_OHM * 10UL))
 
+/* The 3 buttons share ONE pin. Each button puts a different resistor in the circuit, so the pin voltage (and the
+ * ADC number) is different for each button. The code reads the number and guesses which button it is. */
 /* ---- Front-Panel Keypad Thresholds (10-bit ADC on PD6 w/ 10k Pull-Up) ---
  * Expected ADC readings: No key = ~1023, '-' (4.7k) = ~327, 'OK' (2.2k) = ~184, '+' (0..1k) = ~25..93 */
 #define KEY_ADC_NONE_MIN 720U     /* >= 720: No button pressed */
@@ -89,6 +104,8 @@ _Static_assert(SAMPLES_PER_BLOCK == 128U && WIN_BLOCKS == 4U, "adc_dsp.c shifts 
 #define KEY_REPEAT_MS 80UL        /* Auto-repeat rate while held: 1 step every 80 ms (12.5 Hz) */
 #define KEY_LONG_MS 3000UL        /* Hold 'OK' for 3.0 seconds to clear LOC3 over-current lockout */
 
+/* The raw measurement jitters a little (220.1, 219.9, 220.2...). These numbers make the display calm:
+ * small wiggles are ignored, big real changes show immediately. This only affects the DISPLAY, never the trip. */
 /* ---- Running Display Filter Tuning (Mode 1 Normal Run Only) ------------- */
 #define V_SNAP_DV 20          /* 2.0 V: If voltage jumps > 2.0 V, display snaps immediately */
 #define V_DEAD_DV 3           /* 0.3 V: Ignore tiny <= 0.3 V fluctuations to prevent flicker */
@@ -96,6 +113,7 @@ _Static_assert(SAMPLES_PER_BLOCK == 128U && WIN_BLOCKS == 4U, "adc_dsp.c shifts 
 #define A_DEAD_CA 3           /* 0.03 A: Ignore tiny <= 0.03 A fluctuations to prevent flicker */
 #define DISPLAY_BRIGHTNESS 4U /* TM1637 LED brightness level (0 = dimmest, 7 = brightest) */
 
+/* Timing numbers for the protection logic. Times are in milliseconds (ms): 1000 ms = 1 second. */
 /* ---- Protection State Machine Timers ------------------------------------ */
 #define TRIP_V_BLOCKS 3U          /* UV/OV must persist 3 consecutive 20 ms blocks (60 ms) before trip; 1 = old instant trip */
 #define DSP_ALIVE_MS 100UL        /* No new RMS block for 100 ms = sensing dead -> relay OFF (E-SE) */
@@ -109,6 +127,8 @@ _Static_assert(SAMPLES_PER_BLOCK == 128U && WIN_BLOCKS == 4U, "adc_dsp.c shifts 
 #define DEF_CAL_A_Q12 4096U /* 1.0000x current trim */
 #define DEF_ZERO_Q6   0U    /* No zero-input noise floor subtracted until C-0 is run */
 
+/* These are the values the chip uses the very first time (or after "rSt" reset in the Settings menu).
+ * The user can change them later with the buttons. */
 /* ---- Factory Default Protection Settings (Indonesia 220 V / 50 Hz) ------ */
 #define DEF_OV_V 245U    /* P01: Over-voltage trip threshold = 245 V */
 #define DEF_UV_V 180U    /* P02: Under-voltage trip threshold = 180 V */

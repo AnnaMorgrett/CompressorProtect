@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How the Compressor Protector works</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f7f8fa;--fg:#1b1f24;--muted:#555d68;--card:#ffffff;--line:#d9dde3;--accent:#0a6cff}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14171b;--fg:#e8ebef;--muted:#a3abb6;--card:#1d2127;--line:#2d333b;--accent:#6aa5ff}}
+:root[data-theme="dark"]{--bg:#14171b;--fg:#e8ebef;--muted:#a3abb6;--card:#1d2127;--line:#2d333b;--accent:#6aa5ff}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:880px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:1.9rem;line-height:1.2;margin:.2em 0}
+h2{font-size:1.3rem;margin:0 0 .3em;color:var(--accent)}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:18px 0}
+.lead{font-size:1.1rem;color:var(--muted)}
+.diagram{background:#fff;color:#000;border-radius:10px;padding:10px;overflow-x:auto;margin-top:10px}
+pre.mermaid{margin:0;background:transparent;color:#000}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:420px}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:rgba(127,127,127,.12)}
+code{background:rgba(127,127,127,.18);padding:1px 6px;border-radius:5px;font-family:ui-monospace,Consolas,monospace}
+.tip{border-left:4px solid var(--accent);padding:6px 12px;background:rgba(10,108,255,.08);border-radius:6px}
+</style></head><body><main>
+<h1>How the Compressor Protector works</h1>
+<p class="lead">A plain-English tour of your firmware. If a word is new, check the glossary at the bottom.</p>
+<div class="tip"><b>In one sentence:</b> the chip watches the mains voltage and the compressor current. If anything is unsafe it opens the relay, then waits several minutes before it allows a restart.</div>
+
+<section><h2>Two workers run at the same time</h2>
+<p><b>1. The main loop</b> (main.c) is the slow, relaxed worker. It reads buttons, updates the display and runs the countdown.</p>
+<p><b>2. Interrupts</b> are the urgent worker. They pause the main loop automatically, do a very short job, and let it continue. Every <b>20 ms</b> one interrupt measures volts and amps and cuts the relay if needed. Every <b>1 ms</b> another one keeps the clock and blinks the LED.</p>
+<p>That is why the safety never waits for the display or the buttons.</p></section>
+
+<section><h2>1. The big picture</h2><p>The chip sits between the mains and the compressor. It measures voltage and current many times per second, and decides whether the relay may stay closed.</p><div class="diagram"><pre class="mermaid">flowchart LR
+  M["220 V mains"] --> VS["Voltage sensor ZMPT101B"]
+  M --> RL{{"Relay: switches the compressor"}}
+  RL --> LD["Compressor"]
+  LD --> CS["Current sensor ZHT103"]
+  VS --> ADC["Chip ADC measures 6400 times per second"]
+  CS --> ADC
+  ADC --> DSP["Math: volts and amps every 20 ms"]
+  DSP --> BR["Protection brain"]
+  BT["3 buttons"] --> BR
+  BR --> RL
+  BR --> UI["Display, LED, buzzer"]</pre></div></section>
+<section><h2>2. What happens at power-on (main.c)</h2><p>Everything starts in main(). It prepares the hardware (always with the relay OFF), picks a mode, then repeats five small jobs forever. The urgent work happens in interrupts, not in this loop.</p><div class="diagram"><pre class="mermaid">flowchart TD
+  A(["Power on"]) --> B["hal_init: clock, pins safe, RELAY OFF, 1 ms timer, watchdog"]
+  B --> C["adc_init + adc_service: ADC ready, measure real supply voltage"]
+  C --> D["nvm_load: read saved settings from Flash"]
+  D --> E["display_init, input_init, adc_start: sampling begins"]
+  E --> F["Show ---- for 0.2 s"]
+  F --> G{"CAL jumper shorted?"}
+  G -- yes --> H["mode_cal: Calibration"] --> Z(["donE: power cycle needed"])
+  G -- no --> I{"OK button held?"}
+  I -- yes --> J["mode_settings: Settings menu"] --> Z
+  I -- no --> K["fsm_init: start protection"]
+  K --> L1["Main loop forever"]
+  L1 --> L2["1 feed watchdog if sensing alive"] --> L3["2 adc_service"] --> L4["3 input_poll: buttons"] --> L5["4 fsm_step: decisions"] --> L6["5 display_flush"] --> L1</pre></div></section>
+<section><h2>3. How a measurement is made (adc_dsp.c)</h2><p>No program code is needed to take samples: a timer, the ADC and a DMA “robot” do it by themselves. Only once per 20 ms (one wave of 50 Hz mains) does an interrupt wake the CPU to do the math.</p><div class="diagram"><pre class="mermaid">flowchart LR
+  T["Timer 1 ticks 6400 times per second"] --> A["ADC snapshot: VOLTAGE then CURRENT"]
+  A --> DM["DMA robot stores numbers in an array"]
+  DM --> Q{"128 snapshots = 20 ms?"}
+  Q -- no --> T
+  Q -- yes --> I["INTERRUPT: process_block"]
+  I --> R["RMS math: volts and amps"]
+  R --> F["fsm_on_block: trip check"]
+  F --> U["Update smooth display numbers"]
+  U --> T</pre></div></section>
+<section><h2>4. The protection brain: 4 states (fsm_protect.c)</h2><p>The protector is always in exactly one of four situations. Events (timers, faults, long button press) move it to another one.</p><div class="diagram"><pre class="mermaid">stateDiagram-v2
+  [*] --> DELAY: power on
+  [*] --> LOCKOUT: power on, trip counter already full
+  DELAY --> RUN: countdown 0 and voltage OK
+  RUN --> TRIP: fault found (UV, OV, OC or sensor)
+  TRIP --> DELAY: after 3 s
+  TRIP --> LOCKOUT: after 3 s if OC trip limit reached
+  LOCKOUT --> DELAY: hold OK for 3 s</pre></div></section>
+<section><h2>5. The 20 ms safety check (fsm_on_block)</h2><p>This runs inside the 20 ms interrupt, only while the relay is ON. Voltage must be bad for 3 waves (60 ms) in a row, so one electrical spike cannot cut the compressor. Right after switch-on the current limit is higher because motors draw a surge (inrush).</p><div class="diagram"><pre class="mermaid">flowchart TD
+  A(["Every 20 ms"]) --> B{"Relay ON?"}
+  B -- no --> Z(["Nothing to check"])
+  B -- yes --> C{"Voltage below UV for 3 waves in a row?"}
+  C -- yes --> T1["TRIP E-UV: relay OFF now"]
+  C -- no --> D{"Voltage above OV for 3 waves in a row?"}
+  D -- yes --> T2["TRIP E-OV: relay OFF now"]
+  D -- no --> E{"Still inside the start-up window P06?"}
+  E -- yes --> F{"Current above inrush limit?"}
+  F -- yes --> T3["TRIP E-OC: relay OFF now"]
+  F -- no --> OK(["All fine"])
+  E -- no --> G{"Current above normal limit P04?"}
+  G -- no --> R["Reset over-current timer"] --> OK
+  G -- yes --> H["Add 20 ms to over-current timer"]
+  H --> I{"Timer reached P07?"}
+  I -- yes --> T3
+  I -- no --> OK</pre></div></section>
+<section><h2>6. The waiting countdown (DELAY state)</h2><p>After power-on and after every trip the relay stays OFF for P08 minutes. The timer only runs while the mains voltage is in the safe window. This protects the compressor from quick restarts.</p><div class="diagram"><pre class="mermaid">flowchart TD
+  A(["fsm_step in DELAY state"]) --> B{"Measuring still alive?"}
+  B -- no --> C["Show E-SE and restart countdown"]
+  B -- yes --> D{"Voltage inside safe start window?"}
+  D -- no --> E["Restart countdown at full P08 minutes, blink E-UV or E-OV"]
+  D -- yes --> F["Count down one second at a time, show MM:SS"]
+  F --> G{"Countdown reached 0?"}
+  G -- yes --> H["enter_run: relay ON, 1 beep, LED solid"]
+  G -- no --> W(["Wait for next loop"])</pre></div></section>
+<section><h2>7. The watchdog safety net</h2><p>The main loop feeds the watchdog only if measuring is still alive. This stops a frozen ADC from leaving the relay ON with no protection.</p><div class="diagram"><pre class="mermaid">flowchart TD
+  A["Main loop calls hal_wdg_kick"] --> B{"Fresh 20 ms block in the last 300 ms?"}
+  B -- yes --> C["Feed the watchdog: chip keeps running"]
+  B -- no --> D["Do NOT feed it"]
+  D --> E["About 1 s later the chip resets"]
+  E --> F["Relay pin goes LOW: compressor OFF"]</pre></div></section>
+<section><h2>8. Settings menu (hold OK at power-on)</h2><p>Change the limits P01 to P09. Each one has a minimum and maximum so you cannot enter a dangerous value.</p><div class="diagram"><pre class="mermaid">flowchart TD
+  S(["Hold OK while powering on"]) --> A["Display shows Sett"] --> B["Press OK"]
+  B --> C["Browse P01 to P09, SAVE, rSt with plus and minus"]
+  C --> D{"Press OK on which item?"}
+  D -- "P01 to P09" --> E["Edit value with plus and minus, OK to return"] --> C
+  D -- SAVE --> F{"UV and OV limits leave a usable window?"}
+  F -- no --> G["Show Err"] --> C
+  F -- yes --> H["Save to Flash and show donE"]
+  D -- rSt --> I["Restore factory limits and save"] --> C</pre></div></section>
+<section><h2>9. Calibration (short CAL jumper at power-on)</h2><p>Do this once per board with a multimeter so the display shows true volts and amps.</p><div class="diagram"><pre class="mermaid">flowchart TD
+  A(["Short the CAL jumper, power on"]) --> B["C-0: unplug mains and load, press OK"]
+  B --> C{"Noise small enough?"}
+  C -- no --> D["Err: try again"] --> B
+  C -- yes --> E["C-V: connect mains, press plus or minus until display = multimeter, OK"]
+  E --> F["C-A: OK closes relay, adjust until display = clamp meter, OK. Plus skips this step"]
+  F --> G["SAVE: OK writes Flash"] --> H(["donE: remove jumper, power cycle"])</pre></div></section>
+
+<section><h2>Which file does what</h2><div class="scroll"><table>
+<tr><th>File</th><th>In plain words</th></tr>
+<tr><td><code>main.c</code></td><td>The front door: startup, picks the mode, runs the main loop.</td></tr>
+<tr><td><code>config.h</code></td><td>The settings sheet: pin names, timing numbers, default limits.</td></tr>
+<tr><td><code>system.h</code></td><td>Shared data boxes and the list of functions each file offers.</td></tr>
+<tr><td><code>regs.h</code></td><td>A dictionary that gives names to chip register switches.</td></tr>
+<tr><td><code>funconfig.h</code></td><td>Settings for the ch32fun library (clock, interrupts, debug).</td></tr>
+<tr><td><code>hal_sys.c</code></td><td>Safe pin start-up, 1 ms clock, watchdog, relay switch.</td></tr>
+<tr><td><code>adc_dsp.c</code></td><td>The measuring instrument: ADC, DMA, RMS math.</td></tr>
+<tr><td><code>fsm_protect.c</code></td><td>The brain: states, trip rules, countdown.</td></tr>
+<tr><td><code>input_alerts.c</code></td><td>Buttons, CAL jumper, LED and buzzer patterns.</td></tr>
+<tr><td><code>display_tm1637.c</code></td><td>Driver for the 4-digit LED display.</td></tr>
+<tr><td><code>nvm_flash.c</code></td><td>Saves and loads settings in Flash with a checksum.</td></tr>
+<tr><td><code>menu_cal.c</code></td><td>Settings menu and calibration wizard.</td></tr></table></div></section>
+
+<section><h2>What you see on the display</h2><div class="scroll"><table>
+<tr><th>Display</th><th>Meaning</th></tr>
+<tr><td><code>----</code></td><td>Starting up, no measurement yet</td></tr>
+<tr><td><code>05:00</code></td><td>Waiting countdown before the relay may switch on</td></tr>
+<tr><td><code>220</code></td><td>Running: mains voltage in volts</td></tr>
+<tr><td><code>A140</code></td><td>Running: current 1.40 A (alternates with voltage every 2 s)</td></tr>
+<tr><td><code>E-UV</code> / <code>E-OV</code></td><td>Under-voltage / over-voltage</td></tr>
+<tr><td><code>E-OC</code></td><td>Over-current (overload or stalled compressor)</td></tr>
+<tr><td><code>E-SE</code></td><td>Sensor error: measuring stopped, relay forced OFF</td></tr>
+<tr><td><code>LOC3</code></td><td>Locked out after too many over-current trips. Hold OK for 3 s to unlock.</td></tr>
+<tr><td><code>Sett</code>, <code>P01</code> to <code>P09</code>, <code>SAVE</code>, <code>rSt</code>, <code>donE</code>, <code>Err</code></td><td>Settings menu</td></tr>
+<tr><td><code>C-0</code>, <code>C-V</code>, <code>C-A</code></td><td>Calibration steps</td></tr></table></div></section>
+
+<section><h2>LED and buzzer</h2><div class="scroll"><table>
+<tr><th>LED</th><th>Meaning</th><th>Buzzer</th><th>Meaning</th></tr>
+<tr><td>Solid</td><td>Relay ON</td><td>1 beep</td><td>Relay switched on, or saved</td></tr>
+<tr><td>Slow blink</td><td>Countdown or Settings</td><td>3 short beeps</td><td>Fault trip</td></tr>
+<tr><td>Fast blink</td><td>Fault shown, or Calibration</td><td>2 long beeps</td><td>Lockout, repeats every 30 s</td></tr>
+<tr><td>Double flash</td><td>Lockout</td><td></td><td></td></tr></table></div></section>
+
+<section><h2>Settings and their defaults</h2><div class="scroll"><table>
+<tr><th>Code</th><th>Meaning</th><th>Default</th><th>Range</th></tr>
+<tr><td>P01</td><td>Over-voltage trip</td><td>245 V</td><td>230 to 270</td></tr>
+<tr><td>P02</td><td>Under-voltage trip</td><td>180 V</td><td>140 to 210</td></tr>
+<tr><td>P03</td><td>Start hysteresis (extra margin to start)</td><td>10 V</td><td>2 to 20</td></tr>
+<tr><td>P04</td><td>Over-current limit</td><td>1.40 A</td><td>0.50 to 9.99</td></tr>
+<tr><td>P05</td><td>Inrush multiplier</td><td>×2.5</td><td>×1.5 to ×5.0</td></tr>
+<tr><td>P06</td><td>Inrush window after switch-on</td><td>1.5 s</td><td>0.5 to 5.0</td></tr>
+<tr><td>P07</td><td>Over-current delay</td><td>0.5 s</td><td>0.1 to 5.0</td></tr>
+<tr><td>P08</td><td>Restart delay</td><td>5 min</td><td>1 to 10</td></tr>
+<tr><td>P09</td><td>Over-current trips before lockout</td><td>3</td><td>1 to 5</td></tr></table></div></section>
+
+<section><h2>Safety features, in plain words</h2><ul>
+<li><b>Relay starts OFF</b> at every power-on and reset.</li>
+<li><b>Watchdog</b> resets the chip if the program freezes or measuring stops.</li>
+<li><b>Debounced trips</b>: voltage must be bad for 3 waves (60 ms), so one spike cannot cut the compressor.</li>
+<li><b>Anti-short-cycle delay</b>: the compressor always waits P08 minutes before a restart.</li>
+<li><b>Hysteresis</b>: the start window is narrower than the trip window, so the relay does not chatter.</li>
+<li><b>Lockout memory</b>: the over-current trip counter is stored in Flash, so unplugging does not reset it.</li>
+<li><b>Checksum</b> on saved settings: damaged data is ignored and defaults are used.</li></ul></section>
+
+<section><h2>Glossary</h2><div class="scroll"><table>
+<tr><td><b>ADC</b></td><td>Turns a voltage on a pin into a number 0 to 1023.</td></tr>
+<tr><td><b>RMS</b></td><td>The “effective” size of an AC wave. 220 V RMS heats a lamp like 220 V DC.</td></tr>
+<tr><td><b>Interrupt</b></td><td>An automatic pause of the main loop to run an urgent, short function.</td></tr>
+<tr><td><b>DMA</b></td><td>A helper inside the chip that moves data without using the CPU.</td></tr>
+<tr><td><b>Watchdog</b></td><td>A countdown that resets the chip if the program stops feeding it.</td></tr>
+<tr><td><b>Flash</b></td><td>Memory that keeps data without power. Our settings notebook lives here.</td></tr>
+<tr><td><b>CRC</b></td><td>A checksum that detects damaged data.</td></tr>
+<tr><td><b>Q6 / Q8 / Q12</b></td><td>Fixed-point numbers: the value is multiplied by 64 / 256 / 4096 so the chip avoids decimals.</td></tr>
+<tr><td><b>Hysteresis</b></td><td>A gap between the “trip” and “start” levels so the relay does not chatter.</td></tr>
+<tr><td><b>Inrush</b></td><td>The big current surge when a motor starts.</td></tr>
+<tr><td><b>State machine</b></td><td>A program that is always in exactly one situation, and events move it to another.</td></tr></table></div></section>
+</main></body></html>
